@@ -2,14 +2,16 @@
 
 Plugin visual para Discord 338.13 (6021) con Revenge en Android 13.
 
-La versión 0.3.1 es una compilación temporal de diagnóstico:
+La versión 0.4.0 aplica parches dirigidos obtenidos del diagnóstico de Discord 338.13:
 
-- no modifica la interfaz;
-- identifica módulos de navegación y diseño de Discord 338.13 (6021);
-- genera un informe copiable desde los ajustes del plugin;
-- no inspecciona mensajes, usuarios, servidores ni credenciales.
+- recupera el gesto derecho para abrir los detalles y miembros del canal;
+- desactiva Launch Pad;
+- fuerza las opciones heredadas del chat y panel de hilos;
+- anula los experimentos 4C/4D del rediseño de Ajustes;
+- compacta las constantes disponibles del perfil;
+- reduce redondeos y sombras creados después de cargar el plugin.
 
-El informe se utilizará para crear parches dirigidos a la barra inferior, paneles, miembros, perfiles y ajustes.
+Los valores anteriores se guardan y se restauran al desactivar el plugin.
 
 ## Instalación
 

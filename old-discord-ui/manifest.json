@@ -1,6 +1,6 @@
 {
   "name": "OldDiscordUI",
-  "description": "Diagnóstico seguro de módulos para construir la interfaz móvil clásica en Discord 338.13.",
+  "description": "Modo clásico dirigido para Discord 338.13: panel de miembros, chat heredado, perfiles compactos y ajustes sin rediseño.",
   "authors": [
     {
       "name": "Cris + Codex",
