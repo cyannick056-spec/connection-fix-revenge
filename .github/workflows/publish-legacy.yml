@@ -1,0 +1,55 @@
+name: Publish legacy plugin
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "legacy/**"
+      - ".github/workflows/publish-legacy.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-pool
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate plugin manifest
+        run: |
+          hash="$(sha256sum legacy/connection-fix/index.js | cut -d' ' -f1)"
+          node -e '
+            const fs = require("fs");
+            const path = "legacy/connection-fix/manifest.json";
+            const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+            manifest.hash = process.argv[1];
+            fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+          ' "$hash"
+
+      - name: Publish legacy files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git clone --branch gh-pages --single-branch \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            /tmp/connection-fix-pages
+          mkdir -p /tmp/connection-fix-pages/legacy/connection-fix
+          cp legacy/connection-fix/index.js /tmp/connection-fix-pages/legacy/connection-fix/index.js
+          cp legacy/connection-fix/manifest.json /tmp/connection-fix-pages/legacy/connection-fix/manifest.json
+          touch /tmp/connection-fix-pages/.nojekyll
+          git -C /tmp/connection-fix-pages config user.name "github-actions[bot]"
+          git -C /tmp/connection-fix-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C /tmp/connection-fix-pages add .nojekyll legacy/connection-fix
+          if git -C /tmp/connection-fix-pages diff --cached --quiet; then
+            exit 0
+          fi
+          git -C /tmp/connection-fix-pages commit -m "Publish legacy Connection Fix"
+          git -C /tmp/connection-fix-pages push origin gh-pages
