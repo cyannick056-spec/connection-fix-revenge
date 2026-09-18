@@ -1,6 +1,6 @@
 {
   "name": "Connection Fix",
-  "description": "Reconexión manual y aviso semiautomático para Discord.",
+  "description": "Acceso rápido, reconexión manual y recuperación de llamadas de voz.",
   "authors": [
     {
       "name": "Cris + Codex",
