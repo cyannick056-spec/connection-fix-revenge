@@ -40,11 +40,12 @@ jobs:
       - uses: android-actions/setup-android@v4
 
       - name: Install Android SDK
-        run: sdkmanager "platforms;android-37" "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager "platforms;android-36" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Publish Revenge plugin API locally
         run: |
           git clone --depth 1 https://github.com/revenge-mod/revenge-xposed.git /tmp/revenge-xposed
+          sed -i "s/37/36/g" /tmp/revenge-xposed/gradle/libs.versions.toml
           /tmp/revenge-xposed/gradlew -p /tmp/revenge-xposed --no-daemon :api:publishToMavenLocal
 
       - run: bun install
