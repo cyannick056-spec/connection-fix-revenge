@@ -29,6 +29,9 @@ function createContext() {
                         AppState: { currentState: "active" },
                         Pressable: Component,
                         Text: Component,
+                        View: Component,
+                        ScrollView: Component,
+                        Switch: Component,
                     },
                     channels: { getVoiceChannelId: () => "voice-1" },
                 },
@@ -47,14 +50,7 @@ function createContext() {
             },
             patcher: { after: () => () => {} },
             ui: {
-                components: {
-                    Forms: {
-                        FormRow: Component,
-                        FormSection: Component,
-                        FormSwitchRow: Component,
-                        FormText: Component,
-                    },
-                },
+                components: { Forms: {} },
                 alerts: { showConfirmationAlert: options => alerts.push(options) },
                 toasts: { showToast: message => toasts.push(message) },
             },
@@ -80,10 +76,11 @@ assert.equal(typeof plugin.onLoad, "function");
 assert.equal(typeof plugin.settings, "function");
 plugin.onLoad();
 assert.equal(intervals.length, 1);
+assert.ok(timeouts.some(item => item.delay === 2_000));
 
 const settings = plugin.settings();
-const manualRow = settings.children[0];
-manualRow.props.onPress();
+const manualButton = settings.children[1];
+manualButton.props.onPress();
 assert.equal(storage.pendingReconnect.channelId, "voice-1");
 timeouts.find(item => item.delay === 400).callback();
 assert.equal(reloads, 1);

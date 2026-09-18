@@ -6,7 +6,6 @@
     const RECONNECT_WINDOW_MS = 120_000;
 
     const { React, ReactNative, channels } = vendetta.metro.common;
-    const { FormRow, FormSection, FormSwitchRow, FormText } = vendetta.ui.components.Forms;
     const storage = vendetta.plugin.storage;
 
     let timer;
@@ -14,9 +13,6 @@
     let checking = false;
     let promptOpen = false;
     let unpatchHeader;
-
-    storage.autoReconnectEnabled ??= true;
-    storage.autoChannels ??= {};
 
     function getUpdater() {
         const legacy = globalThis.nativeModuleProxy?.BundleUpdaterManager;
@@ -87,7 +83,7 @@
 
     function saveAutoChannel(pending) {
         storage.autoChannels = {
-            ...storage.autoChannels,
+            ...(storage.autoChannels || {}),
             [pending.channelId]: {
                 guildId: pending.guildId,
                 channelName: pending.channelName,
@@ -100,7 +96,8 @@
         delete storage.pendingReconnect;
         if (!pending || Date.now() - pending.requestedAt > RECONNECT_WINDOW_MS) return;
 
-        if (storage.autoReconnectEnabled && storage.autoChannels[pending.channelId]) {
+        const autoChannels = storage.autoChannels || {};
+        if (storage.autoReconnectEnabled !== false && autoChannels[pending.channelId]) {
             vendetta.ui.toasts.showToast(`Reconexión automática: ${pending.channelName}`);
             setTimeout(() => joinVoice(pending), 1_200);
             return;
@@ -216,46 +213,124 @@
     }
 
     function Settings() {
-        const [autoEnabled, setAutoEnabled] = React.useState(storage.autoReconnectEnabled);
-        const [savedCount, setSavedCount] = React.useState(Object.keys(storage.autoChannels).length);
+        const [autoEnabled, setAutoEnabled] = React.useState(
+            storage.autoReconnectEnabled !== false,
+        );
+        const [savedCount, setSavedCount] = React.useState(
+            Object.keys(storage.autoChannels || {}).length,
+        );
         return React.createElement(
-            FormSection,
-            { title: "CONEXIÓN" },
-            React.createElement(FormRow, {
-                label: "Reconectar ahora",
-                subLabel: "Recarga Discord y recuerda la llamada actual.",
-                onPress: reloadNow,
-            }),
-            React.createElement(FormSwitchRow, {
-                label: "Reconexión automática de voz",
-                subLabel: "Solo para canales donde elegiste Siempre en este canal.",
-                value: autoEnabled,
-                onValueChange: value => {
-                    storage.autoReconnectEnabled = value;
-                    setAutoEnabled(value);
-                },
-            }),
-            React.createElement(FormRow, {
-                label: "Borrar canales guardados",
-                subLabel: `${savedCount} canal(es) guardado(s).`,
-                disabled: savedCount === 0,
-                onPress: () => {
-                    storage.autoChannels = {};
-                    setSavedCount(0);
-                    vendetta.ui.toasts.showToast("Preferencias de voz eliminadas.");
-                },
-            }),
+            ReactNative.ScrollView,
+            { contentContainerStyle: { padding: 16, gap: 12 } },
             React.createElement(
-                FormText,
-                null,
-                "El aviso semiautomático comprueba la conexión cada 30 segundos y pregunta después de tres fallos.",
+                ReactNative.Text,
+                { style: { color: "white", fontSize: 13, fontWeight: "700", marginBottom: 2 } },
+                "CONEXIÓN",
+            ),
+            React.createElement(
+                ReactNative.Pressable,
+                {
+                    onPress: reloadNow,
+                    style: {
+                        backgroundColor: "#5865F2",
+                        borderRadius: 12,
+                        paddingHorizontal: 16,
+                        paddingVertical: 14,
+                    },
+                },
+                React.createElement(
+                    ReactNative.Text,
+                    { style: { color: "white", fontSize: 16, fontWeight: "700" } },
+                    "Reconectar ahora",
+                ),
+                React.createElement(
+                    ReactNative.Text,
+                    { style: { color: "#E3E5E8", fontSize: 13, marginTop: 4 } },
+                    "Recarga Discord y recuerda la llamada actual.",
+                ),
+            ),
+            React.createElement(
+                ReactNative.View,
+                {
+                    style: {
+                        backgroundColor: "#2B2D31",
+                        borderRadius: 12,
+                        paddingHorizontal: 16,
+                        paddingVertical: 12,
+                        flexDirection: "row",
+                        alignItems: "center",
+                    },
+                },
+                React.createElement(
+                    ReactNative.View,
+                    { style: { flex: 1, paddingRight: 12 } },
+                    React.createElement(
+                        ReactNative.Text,
+                        { style: { color: "white", fontSize: 15, fontWeight: "600" } },
+                        "Reconexión automática de voz",
+                    ),
+                    React.createElement(
+                        ReactNative.Text,
+                        { style: { color: "#B5BAC1", fontSize: 13, marginTop: 4 } },
+                        "Solo se usa en canales donde elegiste Siempre en este canal.",
+                    ),
+                ),
+                React.createElement(ReactNative.Switch, {
+                    value: autoEnabled,
+                    onValueChange: value => {
+                        storage.autoReconnectEnabled = value;
+                        setAutoEnabled(value);
+                    },
+                }),
+            ),
+            React.createElement(
+                ReactNative.Pressable,
+                {
+                    disabled: savedCount === 0,
+                    onPress: () => {
+                        storage.autoChannels = {};
+                        setSavedCount(0);
+                        vendetta.ui.toasts.showToast("Preferencias de voz eliminadas.");
+                    },
+                    style: {
+                        backgroundColor: "#2B2D31",
+                        borderRadius: 12,
+                        paddingHorizontal: 16,
+                        paddingVertical: 14,
+                        opacity: savedCount === 0 ? 0.5 : 1,
+                    },
+                },
+                React.createElement(
+                    ReactNative.Text,
+                    { style: { color: "white", fontSize: 15, fontWeight: "600" } },
+                    "Borrar canales guardados",
+                ),
+                React.createElement(
+                    ReactNative.Text,
+                    { style: { color: "#B5BAC1", fontSize: 13, marginTop: 4 } },
+                    `${savedCount} canal(es) guardado(s).`,
+                ),
+            ),
+            React.createElement(
+                ReactNative.Text,
+                { style: { color: "#B5BAC1", fontSize: 13, lineHeight: 19 } },
+                "El detector comprueba la conexión cada 30 segundos y pregunta después de tres fallos.",
             ),
         );
     }
 
     return {
         onLoad() {
-            installQuickButton();
+            setTimeout(() => {
+                try {
+                    installQuickButton();
+                } catch (error) {
+                    vendetta.logger.warn(
+                        "No se pudo instalar el botón rápido. El resto del plugin seguirá activo.",
+                        error,
+                    );
+                }
+            }, 2_000);
             timer = setInterval(checkConnection, CHECK_EVERY_MS);
             setTimeout(handlePendingReconnect, 1_500);
             vendetta.ui.toasts.showToast("Connection Fix está activo.");
