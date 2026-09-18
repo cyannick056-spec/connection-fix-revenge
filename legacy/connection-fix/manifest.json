@@ -1,6 +1,6 @@
 {
   "name": "Connection Fix",
-  "description": "Reconexión manual y aviso semiautomático para Discord.",
+  "description": "Acceso rápido, reconexión manual y recuperación de llamadas de voz.",
   "authors": [
     {
       "name": "Cris + Codex",
@@ -8,7 +8,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "ab5496d01f8bb10a8e2f9b707b78fe3eb57839072912f31178c555d23c8b6f99",
+  "hash": "1e4c427ea68ecbd19c40bcae7c47efc8aa65ed14a9756a5e28763b6ee01f172a",
   "vendetta": {
     "icon": "ic_connection"
   }
