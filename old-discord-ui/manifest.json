@@ -1,0 +1,15 @@
+{
+  "name": "OldDiscordUI",
+  "description": "Interfaz más clásica, compacta y ligera para Discord 338.13.",
+  "authors": [
+    {
+      "name": "Cris + Codex",
+      "id": "0"
+    }
+  ],
+  "main": "index.js",
+  "hash": "522141e9e81625412d5266eb5ce0462cdc5049ede6a907729fc63451557337de",
+  "vendetta": {
+    "icon": "ic_theme_24px"
+  }
+}
