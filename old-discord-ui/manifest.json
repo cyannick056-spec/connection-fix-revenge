@@ -1,6 +1,6 @@
 {
   "name": "OldDiscordUI",
-  "description": "Interfaz más clásica, compacta y ligera para Discord 338.13.",
+  "description": "Restaura una apariencia móvil clásica: paneles laterales, listas compactas y sin navegación flotante moderna.",
   "authors": [
     {
       "name": "Cris + Codex",
@@ -13,4 +13,3 @@
     "icon": "ic_theme_24px"
   }
 }
-
