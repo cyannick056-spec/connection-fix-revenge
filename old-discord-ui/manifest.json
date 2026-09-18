@@ -1,6 +1,6 @@
 {
   "name": "OldDiscordUI",
-  "description": "Restaura una apariencia móvil clásica: paneles laterales, listas compactas y sin navegación flotante moderna.",
+  "description": "Diagnóstico seguro de módulos para construir la interfaz móvil clásica en Discord 338.13.",
   "authors": [
     {
       "name": "Cris + Codex",
@@ -8,7 +8,7 @@
     }
   ],
   "main": "index.js",
-  "hash": "630f804f31a4dc1e142ad5d0b3886ac97f0c33cfa07f163f881154b8f5f8ba40",
+  "hash": "39c6f5ab14089c18da8fd3fd9e0a421e64007ba77cb30f7d9062e559a27b7102",
   "vendetta": {
     "icon": "ic_theme_24px"
   }
