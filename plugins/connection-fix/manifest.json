@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "id": "mx.cris.connection-fix",
+  "name": "Connection Fix",
+  "description": "Repara las conexiones HTTP atascadas de Discord sin reiniciar la app ni cortar la llamada.",
+  "author": "Cris + Codex",
+  "version": "1.0.0",
+  "dependencies": {
+    "revenge.api": { "version": ">=1 <2" },
+    "discord": { "version": ">=338.0" }
+  },
+  "dist": {
+    "script": "index.js",
+    "android": {
+      "path": "plugin.jar",
+      "class": "mx.cris.connectionfix.ConnectionFixPlugin"
+    }
+  }
+}
