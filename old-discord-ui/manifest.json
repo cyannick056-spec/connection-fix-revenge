@@ -1,6 +1,6 @@
 {
-  "name": "Connection Fix",
-  "description": "Acceso rápido, reconexión manual y recuperación de llamadas de voz.",
+  "name": "OldDiscordUI",
+  "description": "Interfaz más clásica, compacta y ligera para Discord 338.13.",
   "authors": [
     {
       "name": "Cris + Codex",
@@ -10,6 +10,7 @@
   "main": "index.js",
   "hash": "GENERATED_BY_WORKFLOW",
   "vendetta": {
-    "icon": "ic_connection"
+    "icon": "ic_theme_24px"
   }
 }
+

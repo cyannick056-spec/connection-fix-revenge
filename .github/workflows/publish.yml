@@ -1,0 +1,55 @@
+name: Publish OldDiscordUI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "old-discord-ui/**"
+      - ".github/workflows/publish.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-old-discord-ui
+  cancel-in-progress: false
+
+jobs:
+  validate-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JavaScript and manifest
+        run: |
+          node --check old-discord-ui/index.js
+          node -e 'JSON.parse(require("fs").readFileSync("old-discord-ui/manifest.json", "utf8"))'
+
+      - name: Generate integrity hash
+        run: |
+          hash="$(sha256sum old-discord-ui/index.js | cut -d' ' -f1)"
+          node -e '
+            const fs = require("fs");
+            const path = "old-discord-ui/manifest.json";
+            const manifest = JSON.parse(fs.readFileSync(path, "utf8"));
+            manifest.hash = process.argv[1];
+            fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+          ' "$hash"
+
+      - name: Replace published repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git clone --branch gh-pages --single-branch \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            /tmp/old-discord-ui-pages
+          find /tmp/old-discord-ui-pages -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R old-discord-ui /tmp/old-discord-ui-pages/old-discord-ui
+          touch /tmp/old-discord-ui-pages/.nojekyll
+          git -C /tmp/old-discord-ui-pages config user.name "github-actions[bot]"
+          git -C /tmp/old-discord-ui-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C /tmp/old-discord-ui-pages add -A
+          git -C /tmp/old-discord-ui-pages commit -m "Publish OldDiscordUI 0.2.0"
+          git -C /tmp/old-discord-ui-pages push origin gh-pages
+
