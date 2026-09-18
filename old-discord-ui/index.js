@@ -1,260 +1,138 @@
 (() => {
-    const VERSION = "0.3.0";
-    const PATCH_MARK = Symbol("OldDiscordUI.patched");
-    const restores = [];
-
+    const VERSION = "0.3.1-diagnostic";
     const { React, ReactNative } = vendetta.metro.common;
+    const TARGETS = ["YouBar", "BottomTab", "MainTabs", "Guilds", "ChannelDrawer", "ChannelList", "MemberList", "MemberRow", "UserProfile", "UserSettings", "Navigation", "StandaloneChannel"];
 
-    const hiddenModernComponents = [
-        "YouBarFloatingShade",
-        "YouBarNameplate",
-        "MainTabsContentScrim",
-        "BottomTabBar",
-        "BottomTabs",
-        "FloatingTabBar",
-    ];
+    function safeName(value) {
+        if (typeof value !== "function") return "";
+        return String(value.displayName || value.name || "");
+    }
 
-    const radiusKeys = new Set([
-        "borderRadius",
-        "borderTopLeftRadius",
-        "borderTopRightRadius",
-        "borderBottomLeftRadius",
-        "borderBottomRightRadius",
-        "borderStartStartRadius",
-        "borderStartEndRadius",
-        "borderEndStartRadius",
-        "borderEndEndRadius",
-    ]);
-
-    const spacingKeys = new Set([
-        "padding", "paddingHorizontal", "paddingVertical", "paddingTop",
-        "paddingRight", "paddingBottom", "paddingLeft", "paddingStart", "paddingEnd",
-        "margin", "marginHorizontal", "marginVertical", "marginTop",
-        "marginRight", "marginBottom", "marginLeft", "marginStart", "marginEnd",
-        "gap", "rowGap", "columnGap",
-    ]);
-
-    function isCircle(style) {
-        const width = Number(style.width);
-        const height = Number(style.height);
-        const radius = Number(style.borderRadius);
-        if (Number.isFinite(width) && Number.isFinite(height) && width === height) {
-            return radius >= width / 2;
+    function inspectModule(module) {
+        if (!module || (typeof module !== "object" && typeof module !== "function")) return null;
+        let keys;
+        try { keys = Object.keys(module).slice(0, 60); } catch { return null; }
+        const functionNames = [];
+        const evidence = new Set();
+        for (const key of keys) {
+            let value;
+            try { value = module[key]; } catch { continue; }
+            const name = safeName(value);
+            if (name) functionNames.push(name);
+            const identity = `${key} ${name}`.toLowerCase();
+            for (const target of TARGETS) {
+                if (identity.includes(target.toLowerCase())) evidence.add(target);
+            }
+            if (typeof value === "function" && evidence.size < 4) {
+                try {
+                    const source = Function.prototype.toString.call(value).slice(0, 1800).toLowerCase();
+                    for (const target of TARGETS) {
+                        if (source.includes(target.toLowerCase())) evidence.add(target);
+                    }
+                } catch {}
+            }
         }
-        return radius >= 999;
+        if (!evidence.size) return null;
+        return {
+            evidence: [...evidence].sort(),
+            keys: keys.slice(0, 24),
+            functions: [...new Set(functionNames)].slice(0, 18),
+        };
     }
 
-    function compactNumber(value) {
-        if (!Number.isFinite(value) || Math.abs(value) < 12) return value;
-        return Math.round(value * 0.72);
-    }
-
-    function classicStyle(style) {
-        if (!style || typeof style !== "object") return style;
-        if (Array.isArray(style)) return style.map(classicStyle);
-
-        const circular = isCircle(style);
-        let changed = false;
-        const next = { ...style };
-
-        for (const key of Object.keys(next)) {
-            const value = next[key];
-
-            if (radiusKeys.has(key) && typeof value === "number" && !circular) {
-                const replacement = Math.min(value, 2);
-                if (replacement !== value) {
-                    next[key] = replacement;
-                    changed = true;
+    function scanModules() {
+        const found = [];
+        const seen = new Set();
+        if (typeof vendetta.metro.findAll !== "function") {
+            return { error: "Esta compilación de Revenge no expone metro.findAll.", matches: [] };
+        }
+        try {
+            vendetta.metro.findAll(module => {
+                const match = inspectModule(module);
+                if (!match) return false;
+                const signature = JSON.stringify(match);
+                if (!seen.has(signature) && found.length < 80) {
+                    seen.add(signature);
+                    found.push(match);
                 }
-                continue;
-            }
-
-            if (spacingKeys.has(key) && typeof value === "number") {
-                const replacement = compactNumber(value);
-                if (replacement !== value) {
-                    next[key] = replacement;
-                    changed = true;
-                }
-                continue;
-            }
-
-            if (key === "elevation" && value !== 0) {
-                next[key] = 0;
-                changed = true;
-                continue;
-            }
-
-            if (key === "shadowOpacity" && value !== 0) {
-                next[key] = 0;
-                changed = true;
-                continue;
-            }
-
-            if ((key === "shadowRadius" || key === "shadowOffset") && value != null) {
-                next[key] = key === "shadowRadius" ? 0 : { width: 0, height: 0 };
-                changed = true;
-            }
-        }
-
-        return changed ? next : style;
-    }
-
-    function classicProps(props) {
-        if (!props || typeof props !== "object" || !props.style) return props;
-        const style = classicStyle(props.style);
-        return style === props.style ? props : { ...props, style };
-    }
-
-    function componentName(type) {
-        if (typeof type === "string") return type;
-        return String(type?.displayName || type?.name || "");
-    }
-
-    function shouldHideModernComponent(type) {
-        const name = componentName(type);
-        return hiddenModernComponents.some(part => name.includes(part));
-    }
-
-    function classicElementProps(type, props) {
-        if (!props || typeof props !== "object") return props;
-        const name = componentName(type);
-        let next = classicProps(props);
-
-        if (
-            name.includes("GuildChannel") ||
-            name.includes("ChannelList") ||
-            name.includes("MemberRow") ||
-            name.includes("MemberList") ||
-            name.includes("Message")
-        ) {
-            next = {
-                ...next,
-                style: [
-                    classicStyle(next?.style),
-                    { borderRadius: 0, elevation: 0, shadowOpacity: 0 },
-                ],
-            };
-        }
-
-        return next;
-    }
-
-    function replaceMethod(target, key, wrapper) {
-        if (!target || typeof target[key] !== "function" || target[key][PATCH_MARK]) return false;
-        const original = target[key];
-        const replacement = wrapper(original);
-        Object.defineProperty(replacement, PATCH_MARK, { value: true });
-        target[key] = replacement;
-        restores.push(() => {
-            if (target[key] === replacement) target[key] = original;
-        });
-        return true;
-    }
-
-    function patchStyleSheet() {
-        replaceMethod(ReactNative.StyleSheet, "create", original => function (styles) {
-            const transformed = {};
-            for (const [name, style] of Object.entries(styles || {})) {
-                transformed[name] = classicStyle(style);
-            }
-            return original.call(this, transformed);
-        });
-    }
-
-    function patchCreateElement() {
-        replaceMethod(React, "createElement", original => function (type, props, ...children) {
-            if (shouldHideModernComponent(type)) return null;
-            return original.call(this, type, classicElementProps(type, props), ...children);
-        });
-    }
-
-    function patchJsxRuntime() {
-        const runtime = vendetta.metro.findByProps("jsx", "jsxs", "Fragment");
-        if (!runtime) return;
-        for (const key of ["jsx", "jsxs", "jsxDEV"]) {
-            replaceMethod(runtime, key, original => function (type, props, ...rest) {
-                if (shouldHideModernComponent(type)) return null;
-                return original.call(this, type, classicElementProps(type, props), ...rest);
+                return false;
             });
+        } catch (error) {
+            return { error: String(error?.message || error), matches: found };
+        }
+        return { error: null, matches: found };
+    }
+
+    function buildReport(result) {
+        const lines = [
+            "OLD_DISCORD_UI_DIAGNOSTIC",
+            `plugin=${VERSION}`,
+            "discord=338.13 (6021)",
+            `revenge=${globalThis.vendetta ? "available" : "missing"}`,
+            `findAll=${typeof vendetta.metro.findAll}`,
+            `matches=${result.matches.length}`,
+        ];
+        if (result.error) lines.push(`error=${result.error}`);
+        result.matches.forEach((match, index) => {
+            lines.push("", `[${index + 1}] evidence=${match.evidence.join(",")}`);
+            lines.push(`keys=${match.keys.join(",")}`);
+            lines.push(`functions=${match.functions.join(",") || "(anonymous)"}`);
+        });
+        return lines.join("\n");
+    }
+
+    function copyReport(report) {
+        const clipboard = vendetta.metro.findByProps("setString") || vendetta.metro.findByProps("setStringAsync");
+        try {
+            if (typeof clipboard?.setString === "function") clipboard.setString(report);
+            else if (typeof clipboard?.setStringAsync === "function") clipboard.setStringAsync(report);
+            else throw new Error("Clipboard module not found");
+            vendetta.ui.toasts.showToast("Informe copiado.");
+        } catch (error) {
+            vendetta.logger.warn("OldDiscordUI: no se pudo copiar el informe", error);
+            vendetta.ui.toasts.showToast("No se pudo copiar. Mantén pulsado el informe para seleccionarlo.");
         }
     }
 
-    function patchDesignTokens() {
-        const candidates = [
-            vendetta.metro.findByProps("BACKGROUND_MOBILE_PRIMARY", "BACKGROUND_MOBILE_SECONDARY"),
-            vendetta.metro.findByProps("CHANNEL_DRAWER_CORNER_RADIUS"),
-            vendetta.metro.findByProps("CARD_RADIUS", "BUTTON_RADIUS"),
-        ].filter(Boolean);
-
-        for (const candidate of candidates) {
-            const targets = [candidate, candidate.modules?.mobile].filter(Boolean);
-            for (const target of targets) {
-                for (const key of Object.keys(target)) {
-                    if (!/RADIUS|ELEVATION|SHADOW/i.test(key)) continue;
-                    const previous = target[key];
-                    if (typeof previous !== "number") continue;
-                    try {
-                        target[key] = 0;
-                        restores.push(() => {
-                            try { target[key] = previous; } catch {}
-                        });
-                    } catch {}
-                }
-            }
-        }
+    function Button({ label, onPress, disabled }) {
+        return React.createElement(ReactNative.Pressable, {
+            disabled, onPress,
+            style: { backgroundColor: disabled ? "#3F4147" : "#5865F2", borderRadius: 8, paddingHorizontal: 16, paddingVertical: 13, alignItems: "center" },
+        }, React.createElement(ReactNative.Text, { style: { color: "white", fontSize: 15, fontWeight: "700" } }, label));
     }
 
-    function patchModernNavigationSurfaces() {
-        const modules = [
-            vendetta.metro.findByProps("YouBarFloatingShade"),
-            vendetta.metro.findByProps("MainTabsContentScrim"),
-            vendetta.metro.findByProps("BottomTabBar"),
-        ].filter(Boolean);
-
-        for (const module of modules) {
-            for (const key of Object.keys(module)) {
-                const value = module[key];
-                if (typeof value !== "function") continue;
-                const name = componentName(value) || key;
-                if (!hiddenModernComponents.some(part => name.includes(part) || key.includes(part))) continue;
-                const original = value;
-                const replacement = () => null;
-                module[key] = replacement;
-                restores.push(() => {
-                    if (module[key] === replacement) module[key] = original;
-                });
-            }
+    function Settings() {
+        const [report, setReport] = React.useState(vendetta.plugin.storage.lastDiagnosticReport || "Pulsa «Analizar Discord 338.13» y espera unos segundos.");
+        const [scanning, setScanning] = React.useState(false);
+        function runScan() {
+            if (scanning) return;
+            setScanning(true);
+            setReport("Analizando módulos de navegación…");
+            setTimeout(() => {
+                try {
+                    const result = scanModules();
+                    const nextReport = buildReport(result);
+                    setReport(nextReport);
+                    vendetta.plugin.storage.lastDiagnosticReport = nextReport;
+                    vendetta.ui.toasts.showToast(result.error ? "Diagnóstico terminado con una advertencia." : `Diagnóstico terminado: ${result.matches.length} coincidencias.`);
+                } catch (error) {
+                    setReport(buildReport({ error: String(error?.message || error), matches: [] }));
+                } finally { setScanning(false); }
+            }, 250);
         }
-    }
-
-    function restoreAll() {
-        while (restores.length) {
-            try {
-                restores.pop()();
-            } catch (error) {
-                vendetta.logger.warn("OldDiscordUI: no se pudo restaurar un parche", error);
-            }
-        }
+        return React.createElement(ReactNative.ScrollView, { contentContainerStyle: { padding: 16, gap: 12 } },
+            React.createElement(ReactNative.Text, { style: { color: "white", fontSize: 20, fontWeight: "800" } }, "OldDiscordUI — Diagnóstico"),
+            React.createElement(ReactNative.Text, { style: { color: "#B5BAC1", fontSize: 14, lineHeight: 20 } }, "Busca solamente módulos relacionados con navegación y diseño. No lee mensajes, usuarios, tokens ni contenido de tus servidores."),
+            React.createElement(Button, { label: scanning ? "Analizando…" : "Analizar Discord 338.13", disabled: scanning, onPress: runScan }),
+            React.createElement(Button, { label: "Copiar informe", disabled: scanning || !report.startsWith("OLD_DISCORD_UI"), onPress: () => copyReport(report) }),
+            React.createElement(ReactNative.Text, { selectable: true, style: { color: "#DBDEE1", backgroundColor: "#111214", borderRadius: 8, padding: 12, fontFamily: "monospace", fontSize: 11, lineHeight: 16 } }, report),
+        );
     }
 
     return {
-        onLoad() {
-            try {
-                patchStyleSheet();
-                patchCreateElement();
-                patchJsxRuntime();
-                patchDesignTokens();
-                patchModernNavigationSurfaces();
-                vendetta.ui.toasts.showToast(`OldDiscordUI ${VERSION} — Carga confirmada`);
-            } catch (error) {
-                restoreAll();
-                vendetta.logger.error("OldDiscordUI no pudo iniciarse", error);
-                vendetta.ui.toasts.showToast("OldDiscordUI no pudo iniciarse.");
-            }
-        },
-        onUnload() {
-            restoreAll();
-            vendetta.ui.toasts.showToast("OldDiscordUI desactivado. Reinicia Discord para refrescar toda la interfaz.");
-        },
+        onLoad() { vendetta.ui.toasts.showToast(`OldDiscordUI ${VERSION} listo para diagnosticar.`); },
+        onUnload() {},
+        settings: Settings,
     };
 })()
+

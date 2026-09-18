@@ -50,5 +50,5 @@ jobs:
           git -C /tmp/old-discord-ui-pages config user.name "github-actions[bot]"
           git -C /tmp/old-discord-ui-pages config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git -C /tmp/old-discord-ui-pages add -A
-          git -C /tmp/old-discord-ui-pages commit -m "Publish OldDiscordUI 0.3.0"
+          git -C /tmp/old-discord-ui-pages commit -m "Publish OldDiscordUI 0.3.1 diagnostic"
           git -C /tmp/old-discord-ui-pages push origin gh-pages
