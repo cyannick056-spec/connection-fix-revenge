@@ -1,0 +1,15 @@
+{
+  "name": "Connection Fix",
+  "description": "Reconexión manual y aviso semiautomático para Discord.",
+  "authors": [
+    {
+      "name": "Cris + Codex",
+      "id": "0"
+    }
+  ],
+  "main": "index.js",
+  "hash": "ab5496d01f8bb10a8e2f9b707b78fe3eb57839072912f31178c555d23c8b6f99",
+  "vendetta": {
+    "icon": "ic_connection"
+  }
+}
