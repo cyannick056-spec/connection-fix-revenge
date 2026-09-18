@@ -1,9 +1,18 @@
 (() => {
-    const VERSION = "0.2.0";
+    const VERSION = "0.3.0";
     const PATCH_MARK = Symbol("OldDiscordUI.patched");
     const restores = [];
 
     const { React, ReactNative } = vendetta.metro.common;
+
+    const hiddenModernComponents = [
+        "YouBarFloatingShade",
+        "YouBarNameplate",
+        "MainTabsContentScrim",
+        "BottomTabBar",
+        "BottomTabs",
+        "FloatingTabBar",
+    ];
 
     const radiusKeys = new Set([
         "borderRadius",
@@ -37,7 +46,7 @@
 
     function compactNumber(value) {
         if (!Number.isFinite(value) || Math.abs(value) < 12) return value;
-        return Math.round(value * 0.82);
+        return Math.round(value * 0.72);
     }
 
     function classicStyle(style) {
@@ -52,7 +61,7 @@
             const value = next[key];
 
             if (radiusKeys.has(key) && typeof value === "number" && !circular) {
-                const replacement = Math.min(value, 4);
+                const replacement = Math.min(value, 2);
                 if (replacement !== value) {
                     next[key] = replacement;
                     changed = true;
@@ -96,6 +105,40 @@
         return style === props.style ? props : { ...props, style };
     }
 
+    function componentName(type) {
+        if (typeof type === "string") return type;
+        return String(type?.displayName || type?.name || "");
+    }
+
+    function shouldHideModernComponent(type) {
+        const name = componentName(type);
+        return hiddenModernComponents.some(part => name.includes(part));
+    }
+
+    function classicElementProps(type, props) {
+        if (!props || typeof props !== "object") return props;
+        const name = componentName(type);
+        let next = classicProps(props);
+
+        if (
+            name.includes("GuildChannel") ||
+            name.includes("ChannelList") ||
+            name.includes("MemberRow") ||
+            name.includes("MemberList") ||
+            name.includes("Message")
+        ) {
+            next = {
+                ...next,
+                style: [
+                    classicStyle(next?.style),
+                    { borderRadius: 0, elevation: 0, shadowOpacity: 0 },
+                ],
+            };
+        }
+
+        return next;
+    }
+
     function replaceMethod(target, key, wrapper) {
         if (!target || typeof target[key] !== "function" || target[key][PATCH_MARK]) return false;
         const original = target[key];
@@ -120,7 +163,8 @@
 
     function patchCreateElement() {
         replaceMethod(React, "createElement", original => function (type, props, ...children) {
-            return original.call(this, type, classicProps(props), ...children);
+            if (shouldHideModernComponent(type)) return null;
+            return original.call(this, type, classicElementProps(type, props), ...children);
         });
     }
 
@@ -129,8 +173,57 @@
         if (!runtime) return;
         for (const key of ["jsx", "jsxs", "jsxDEV"]) {
             replaceMethod(runtime, key, original => function (type, props, ...rest) {
-                return original.call(this, type, classicProps(props), ...rest);
+                if (shouldHideModernComponent(type)) return null;
+                return original.call(this, type, classicElementProps(type, props), ...rest);
             });
+        }
+    }
+
+    function patchDesignTokens() {
+        const candidates = [
+            vendetta.metro.findByProps("BACKGROUND_MOBILE_PRIMARY", "BACKGROUND_MOBILE_SECONDARY"),
+            vendetta.metro.findByProps("CHANNEL_DRAWER_CORNER_RADIUS"),
+            vendetta.metro.findByProps("CARD_RADIUS", "BUTTON_RADIUS"),
+        ].filter(Boolean);
+
+        for (const candidate of candidates) {
+            const targets = [candidate, candidate.modules?.mobile].filter(Boolean);
+            for (const target of targets) {
+                for (const key of Object.keys(target)) {
+                    if (!/RADIUS|ELEVATION|SHADOW/i.test(key)) continue;
+                    const previous = target[key];
+                    if (typeof previous !== "number") continue;
+                    try {
+                        target[key] = 0;
+                        restores.push(() => {
+                            try { target[key] = previous; } catch {}
+                        });
+                    } catch {}
+                }
+            }
+        }
+    }
+
+    function patchModernNavigationSurfaces() {
+        const modules = [
+            vendetta.metro.findByProps("YouBarFloatingShade"),
+            vendetta.metro.findByProps("MainTabsContentScrim"),
+            vendetta.metro.findByProps("BottomTabBar"),
+        ].filter(Boolean);
+
+        for (const module of modules) {
+            for (const key of Object.keys(module)) {
+                const value = module[key];
+                if (typeof value !== "function") continue;
+                const name = componentName(value) || key;
+                if (!hiddenModernComponents.some(part => name.includes(part) || key.includes(part))) continue;
+                const original = value;
+                const replacement = () => null;
+                module[key] = replacement;
+                restores.push(() => {
+                    if (module[key] === replacement) module[key] = original;
+                });
+            }
         }
     }
 
@@ -150,6 +243,8 @@
                 patchStyleSheet();
                 patchCreateElement();
                 patchJsxRuntime();
+                patchDesignTokens();
+                patchModernNavigationSurfaces();
                 vendetta.ui.toasts.showToast(`OldDiscordUI ${VERSION} — Carga confirmada`);
             } catch (error) {
                 restoreAll();
@@ -163,4 +258,3 @@
         },
     };
 })()
-
