@@ -10,6 +10,7 @@ import coil.request.CachePolicy
 import coil.size.Precision
 import com.cris.doamodgallery.R
 import com.cris.doamodgallery.data.ModItem
+import com.cris.doamodgallery.data.OfflineMediaStore
 import com.cris.doamodgallery.databinding.ItemModBinding
 
 class ModAdapter(
@@ -67,9 +68,12 @@ class ModAdapter(
             val width = targetCardWidth()
             val height = targetImageHeight(width)
 
-            // Grid uses the lightweight thumbnail. Full HD is reserved for DetailActivity.
-            // This avoids downloading/decoding dozens of multi-megabyte originals while scrolling.
-            b.image.load(item.previewUrl.ifBlank { item.hdUrl }) {
+            // Prefer the app's persistent offline thumbnail library. Network is only a
+            // fallback while the first background download is still being completed.
+            val source: Any = OfflineMediaStore.thumbnailFile(b.root.context, item)
+                ?: item.previewUrl.ifBlank { item.hdUrl }
+
+            b.image.load(source) {
                 crossfade(false)
                 precision(Precision.INEXACT)
                 size(width.coerceAtLeast(1), height.coerceAtLeast(1))
