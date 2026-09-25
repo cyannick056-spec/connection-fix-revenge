@@ -30,9 +30,11 @@ import com.cris.doamodgallery.scanner.PostimagesGalleryScanner
 import com.cris.doamodgallery.update.AppUpdater
 import com.cris.doamodgallery.util.TextUtils
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class MainActivity : AppCompatActivity() {
@@ -48,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private var busy = false
     private var pendingUpdatePath: String? = null
     private var searchJob: Job? = null
+    private var renderJob: Job? = null
 
     private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -73,6 +76,10 @@ class MainActivity : AppCompatActivity() {
         uiSettings = SettingsStore(this)
         updater = AppUpdater(this)
 
+        // Rebuild categories/titles locally for caches created by older parsers.
+        // No network request is required and a full 3379-item cache is preserved.
+        gallery.reindexLocalMetadata()
+
         adapter = ModAdapter(
             onOpen = { openDetail(it) },
             onFavorite = { favorites.toggle(it.id) }
@@ -82,7 +89,7 @@ class MainActivity : AppCompatActivity() {
         b.recycler.layoutManager = grid
         b.recycler.adapter = adapter
         b.recycler.setHasFixedSize(true)
-        b.recycler.setItemViewCacheSize(12)
+        b.recycler.setItemViewCacheSize(9)
         b.recycler.itemAnimator = null
         adapter.setColumns(grid.spanCount)
 
@@ -148,16 +155,14 @@ class MainActivity : AppCompatActivity() {
     private fun cacheNeedsRepair(items: List<ModItem>): Boolean {
         if (items.isEmpty()) return true
         val badTitles = items.count { it.title == "Sin título verificado" || TextUtils.looksLikePostId(it.title) }
-        // Esta galería tiene ~3379 entradas. Una caché de 432/1968 no vuelve a
-        // considerarse válida y se reconstruye automáticamente.
-        return items.size < 3300 || badTitles > maxOf(5, items.size / 50)
+        return items.size < 3300 || badTitles > maxOf(8, items.size / 40)
     }
 
     private fun setupUi() {
         b.search.doAfterTextChanged {
             searchJob?.cancel()
             searchJob = lifecycleScope.launch {
-                delay(180)
+                delay(120)
                 render()
             }
         }
@@ -319,24 +324,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun render() {
         val all = gallery.current()
-        val q = b.search.text?.toString().orEmpty()
+        val q = b.search.text?.toString().orEmpty().trim()
         val selected = b.characterSpinner.selectedItem?.toString().orEmpty()
             .takeUnless { it == getString(R.string.all_characters) }.orEmpty()
         val favs = favorites.all()
 
-        val filtered = if (q.isBlank() && selected.isBlank() && !showFavorites) {
-            all
-        } else {
-            all.filter { item ->
-                val text = "${item.title} ${item.character} ${item.megaName}"
-                TextUtils.tokenMatch(q, text) &&
-                    (selected.isBlank() || item.character == selected) &&
-                    (!showFavorites || item.id in favs)
-            }
-        }
+        renderJob?.cancel()
+        renderJob = lifecycleScope.launch {
+            val filtered = withContext(Dispatchers.Default) {
+                val base = all.asSequence()
+                    .filter { selected.isBlank() || it.character == selected }
+                    .filter { !showFavorites || it.id in favs }
 
-        adapter.submit(filtered, favs)
-        if (!busy) b.statusText.text = "${filtered.size} de ${all.size} skins"
+                if (q.isBlank()) {
+                    base.toList()
+                } else {
+                    base.mapNotNull { item ->
+                        val score = TextUtils.searchScore(q, item.title, item.character)
+                        if (score >= 0) item to score else null
+                    }.sortedWith(
+                        compareByDescending<Pair<ModItem, Int>> { it.second }
+                            .thenBy { it.first.title.lowercase() }
+                    ).map { it.first }
+                        .toList()
+                }
+            }
+
+            adapter.submit(filtered, favs)
+            if (!busy) b.statusText.text = "${filtered.size} de ${all.size} skins"
+        }
     }
 
     private fun refreshGallery(autoMega: Boolean) {
@@ -364,6 +380,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 gallery.save(merged)
+                gallery.reindexLocalMetadata()
                 refreshCharacterSpinner()
                 render()
                 if (autoMega) syncMegaInternal()
