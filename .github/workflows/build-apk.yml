@@ -4,15 +4,19 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths-ignore:
+      - 'downloads/**'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -34,6 +38,12 @@ jobs:
           echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
 
+      - name: Restore stable Android signing key
+        shell: bash
+        run: |
+          base64 -d ci/doa-dev.keystore.b64 > ci/doa-dev.keystore
+          test -s ci/doa-dev.keystore
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
@@ -42,9 +52,34 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
+      - name: Publish latest APK for in-app updates
+        shell: bash
+        run: |
+          mkdir -p downloads
+          cp app/build/outputs/apk/debug/app-debug.apk downloads/DOA-Mod-Gallery-Android-latest.apk
+
+          VERSION_CODE="$(grep -E '^[[:space:]]*versionCode[[:space:]]*=' app/build.gradle.kts | grep -oE '[0-9]+' | head -1)"
+          VERSION_NAME="$(grep -E '^[[:space:]]*versionName[[:space:]]*=' app/build.gradle.kts | sed -E 's/.*"([^"]+)".*/\1/' | head -1)"
+
+          cat > downloads/latest.json <<EOF
+          {
+            "versionCode": ${VERSION_CODE},
+            "versionName": "${VERSION_NAME}",
+            "apkUrl": "https://raw.githubusercontent.com/cyannick056-spec/connection-fix-revenge/main/downloads/DOA-Mod-Gallery-Android-latest.apk"
+          }
+          EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add downloads/DOA-Mod-Gallery-Android-latest.apk downloads/latest.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Publish Android APK ${VERSION_NAME} [skip ci]"
+            git push origin HEAD:main
+          fi
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DOA-Mod-Gallery-Android-v0.2
+          name: DOA-Mod-Gallery-Android-v0.2.2
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
