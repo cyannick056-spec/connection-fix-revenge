@@ -86,7 +86,12 @@ class MainActivity : AppCompatActivity() {
         setupUi()
         requestNotificationsIfNeeded()
 
-        if (gallery.current().isEmpty()) refreshGallery(autoMega = true) else render()
+        val cached = gallery.current()
+        if (cached.isEmpty() || cacheNeedsRepair(cached)) {
+            refreshGallery(autoMega = true)
+        } else {
+            render()
+        }
     }
 
     override fun onResume() {
@@ -104,11 +109,31 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupSpinner() {
-        val values = listOf(getString(R.string.all_characters)) + TextUtils.characters.distinct().sorted()
+        refreshCharacterSpinner()
+        b.characterSpinner.onItemSelectedListener = SimpleItemSelectedListener { render() }
+    }
+
+    private fun refreshCharacterSpinner() {
+        val previous = b.characterSpinner.selectedItem?.toString().orEmpty()
+        val realCharacters = gallery.current()
+            .map { it.character.trim() }
+            .filter { it.isNotBlank() }
+            .distinct()
+            .sortedBy { it.lowercase() }
+
+        val values = listOf(getString(R.string.all_characters)) + realCharacters
         val a = ArrayAdapter(this, R.layout.spinner_item, values)
         a.setDropDownViewResource(R.layout.spinner_item)
         b.characterSpinner.adapter = a
-        b.characterSpinner.onItemSelectedListener = SimpleItemSelectedListener { render() }
+
+        val index = values.indexOf(previous).takeIf { it >= 0 } ?: 0
+        b.characterSpinner.setSelection(index, false)
+    }
+
+    private fun cacheNeedsRepair(items: List<ModItem>): Boolean {
+        if (items.isEmpty()) return true
+        val idTitles = items.count { TextUtils.looksLikePostId(it.title) }
+        return items.size < 1000 || idTitles > maxOf(5, items.size / 20)
     }
 
     private fun setupUi() {
@@ -120,7 +145,7 @@ class MainActivity : AppCompatActivity() {
         }
         b.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
-                R.id.action_refresh -> { refreshGallery(autoMega = false); true }
+                R.id.action_refresh -> { refreshGallery(autoMega = true); true }
                 R.id.action_hd -> { improveHd(); true }
                 R.id.action_mega -> { syncMega(); true }
                 R.id.action_folder -> { folderPicker.launch(null); true }
@@ -253,6 +278,7 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 gallery.save(merged)
+                refreshCharacterSpinner()
                 render()
                 if (autoMega) syncMegaInternal()
             } catch (e: Exception) {
@@ -300,13 +326,13 @@ class MainActivity : AppCompatActivity() {
         busy = true
         b.progress.visibility = View.VISIBLE
         try {
-            mega.sync { pct, msg ->
+            val megaFiles = mega.sync { pct, msg ->
                 runOnUiThread {
                     b.progress.progress = pct.coerceIn(0, 100)
                     b.statusText.text = msg
                 }
             }
-            b.statusText.text = "Relacionando MEGA con la galería…"
+            b.statusText.text = "MEGA indexado: ${megaFiles.size} archivos. Relacionando…"
             val matches = mega.match(gallery.current()) { done, total, found ->
                 val pct = ((done * 100L) / total.coerceAtLeast(1)).toInt()
                 runOnUiThread {
@@ -315,7 +341,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             gallery.attachMega(matches)
-            b.statusText.text = "MEGA listo: ${matches.size} skins con descarga."
+            b.statusText.text = "MEGA listo: ${megaFiles.size} archivos · ${matches.size} skins con descarga."
             render()
         } catch (e: Exception) {
             b.statusText.text = "Error MEGA: ${e.message}"
