@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.FileProvider
-import com.cris.doamodgallery.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
@@ -44,7 +43,18 @@ class AppUpdater(private val activity: Activity) {
         )
     }
 
-    fun isNewer(info: UpdateInfo): Boolean = info.versionCode > BuildConfig.VERSION_CODE
+    fun isNewer(info: UpdateInfo): Boolean = info.versionCode.toLong() > currentVersionCode()
+
+    @Suppress("DEPRECATION")
+    private fun currentVersionCode(): Long {
+        val pm = activity.packageManager
+        val pkg = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getPackageInfo(activity.packageName, PackageManager.PackageInfoFlags.of(0))
+        } else {
+            pm.getPackageInfo(activity.packageName, 0)
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pkg.longVersionCode else pkg.versionCode.toLong()
+    }
 
     suspend fun download(info: UpdateInfo, onProgress: (Int) -> Unit): File = withContext(Dispatchers.IO) {
         val dir = File(activity.cacheDir, "updates").apply { mkdirs() }
