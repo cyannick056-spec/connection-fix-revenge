@@ -70,17 +70,10 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             var lastCount = -1
             var cycle = 0
 
-            // Esta galería concreta tiene más de 3300 entradas. No aceptamos una caché
-            // incompleta de 400/1900 como si el escaneo hubiera terminado.
             while (cycle < MAX_LOAD_CYCLES) {
                 cycle++
-
-                // Intenta activar botones de carga si Postimages cambia entre lazy-load y botón.
                 eval(web, CLICK_MORE_JS)
                 delay(120)
-
-                // Cada vuelta recorre desde arriba hasta el fondo ACTUAL. Cuando Postimages
-                // agrega más tarjetas, la siguiente vuelta alcanza el nuevo fondo.
                 eval(web, "window.scrollTo(0,0);window.dispatchEvent(new Event('scroll'));'ok';")
                 delay(120)
                 eval(web, SMOOTH_TO_BOTTOM_JS)
@@ -95,8 +88,6 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
                 val loadPct = 5 + ((shown.coerceAtMost(EXPECTED_GALLERY_SIZE) * 66L) / EXPECTED_GALLERY_SIZE).toInt()
                 onProgress(loadPct.coerceIn(5, 72), "Forzando galería completa… $shown skins detectadas")
 
-                // Cada pocas vueltas hacemos un barrido inverso. Esto reactiva ThumbLoader
-                // en WebView cuando deja de disparar IntersectionObserver cerca del fondo.
                 if (cycle % 5 == 0) {
                     eval(web, SMOOTH_TO_TOP_JS)
                     delay(650)
@@ -109,11 +100,8 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
                 stableCycles = if (count == lastCount) stableCycles + 1 else 0
                 lastCount = count
 
-                // Solo damos por terminada la carga cuando ya alcanzamos el tamaño realista
-                // de esta galería Y además dejó de crecer durante varias vueltas.
                 if (count >= MIN_COMPLETE_ITEMS && stableCycles >= 6) break
 
-                // Si se atasca antes del mínimo, hacemos un nudge agresivo y seguimos.
                 if (count < MIN_COMPLETE_ITEMS && stableCycles >= 5) {
                     eval(web, NUDGE_JS)
                     delay(1900)
@@ -134,7 +122,6 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             val done = AtomicInteger(0)
             val semaphore = Semaphore(6)
 
-            // Visitamos solo páginas cuyo nombre/imagen no pudo obtenerse de la tarjeta.
             val resolved = withContext(Dispatchers.IO) {
                 coroutineScope {
                     rows.map { row ->
@@ -159,17 +146,21 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             }
 
             val result = resolved.map { r ->
-                // Nunca usamos el ID del post como nombre visible. Si Postimages no dio un
-                // título verificable, lo dejamos explícitamente sin verificar.
                 val canonical = TextUtils.cleanPostTitle(r.title).trim()
-                val title = canonical.takeIf { it.isNotBlank() && !TextUtils.looksLikePostId(it) }
+                val title = canonical
+                    .takeIf { it.isNotBlank() && !TextUtils.looksLikePostId(it) }
+                    ?.let(TextUtils::prettyTitle)
                     ?: "Sin título verificado"
+
+                val preview = r.preview.ifBlank { r.hd }
+                val hd = r.hd.ifBlank { r.preview }
+
                 ModItem(
                     id = r.href,
                     title = title,
                     pageUrl = r.href,
-                    previewUrl = r.src,
-                    hdUrl = r.src,
+                    previewUrl = preview,
+                    hdUrl = hd,
                     character = TextUtils.detectCharacter(title)
                 )
             }.distinctBy { it.id }
@@ -190,9 +181,11 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             val o = array.optJSONObject(i) ?: continue
             val href = o.optString("href").trimEnd('/')
             if (!href.matches(Regex("https://postimg\\.cc/[A-Za-z0-9_-]+"))) continue
+
             val incoming = Row(
                 href = href,
-                src = o.optString("src"),
+                preview = o.optString("preview"),
+                hd = o.optString("hd"),
                 title = TextUtils.cleanPostTitle(o.optString("title"))
             )
             val old = best[href]
@@ -217,14 +210,14 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             .firstOrNull { it.isNotBlank() && !TextUtils.looksLikePostId(it) }
             .orEmpty()
 
-        val src = listOfNotNull(
+        val hd = listOfNotNull(
             doc.selectFirst("meta[property=og:image]")?.attr("abs:content"),
             doc.selectFirst("meta[name=twitter:image]")?.attr("abs:content"),
             doc.selectFirst("link[rel=image_src]")?.attr("abs:href")
         ).firstOrNull { it.contains("i.postimg.cc") }
             .orEmpty()
 
-        return row.merge(Row(row.href, src, title))
+        return row.merge(Row(row.href, row.preview, hd, title))
     }
 
     private suspend fun eval(web: WebView, script: String): String = kotlinx.coroutines.suspendCancellableCoroutine { cont ->
@@ -239,7 +232,12 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
         return raw.trim().trim('"').toIntOrNull() ?: 0
     }
 
-    private data class Row(val href: String, val src: String, val title: String) {
+    private data class Row(
+        val href: String,
+        val preview: String,
+        val hd: String,
+        val title: String
+    ) {
         fun merge(other: Row): Row {
             val mergedTitle = when {
                 other.title.isNotBlank() && !TextUtils.looksLikePostId(other.title) -> other.title
@@ -247,17 +245,26 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
                 other.title.isNotBlank() -> other.title
                 else -> title
             }
-            val mergedSrc = when {
-                other.src.contains("i.postimg.cc") -> other.src
-                src.contains("i.postimg.cc") -> src
-                other.src.isNotBlank() -> other.src
-                else -> src
+
+            val mergedPreview = when {
+                other.preview.contains("postimg") -> other.preview
+                preview.contains("postimg") -> preview
+                other.preview.isNotBlank() -> other.preview
+                else -> preview
             }
-            return Row(href, mergedSrc, mergedTitle)
+
+            val mergedHd = when {
+                other.hd.contains("i.postimg.cc") -> other.hd
+                hd.contains("i.postimg.cc") -> hd
+                other.hd.isNotBlank() -> other.hd
+                else -> hd
+            }
+
+            return Row(href, mergedPreview, mergedHd, mergedTitle)
         }
 
         fun needsMetadataRepair(): Boolean =
-            title.isBlank() || TextUtils.looksLikePostId(title) || !src.contains("i.postimg.cc")
+            title.isBlank() || TextUtils.looksLikePostId(title) || !hd.contains("i.postimg.cc")
     }
 
     companion object {
@@ -279,18 +286,19 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
                 const a=col.querySelector('a[href]');
                 const img=col.querySelector('img');
                 const href=key ? ('https://postimg.cc/'+key) : ((a&&a.href)||'').replace(/\/$/,'');
-                const src=(hotlink&&name&&ext) ? ('https://i.postimg.cc/'+hotlink+'/'+name+'.'+ext) : (img?(img.currentSrc||img.src||img.dataset.src||img.dataset.original||''):'');
+                const preview=img?(img.currentSrc||img.src||img.dataset.src||img.dataset.original||''):'';
+                const hd=(hotlink&&name&&ext) ? ('https://i.postimg.cc/'+hotlink+'/'+name+'.'+ext) : preview;
                 const title=name || (img?(img.alt||img.title||''):'') || (col.innerText||'').trim();
-                if(href) out.push({href:href,src:src,title:title});
+                if(href) out.push({href:href,preview:preview,hd:hd,title:title});
               }
               if(out.length===0){
                 for(const a of document.querySelectorAll('a[href^="https://postimg.cc/"]')){
                   const href=(a.href||'').replace(/\/$/,'');
                   if(!/^https:\/\/postimg\.cc\/[A-Za-z0-9_-]+$/.test(href)) continue;
                   const img=a.querySelector('img');
-                  const src=img?(img.currentSrc||img.src||img.dataset.src||img.dataset.original||''):'';
+                  const preview=img?(img.currentSrc||img.src||img.dataset.src||img.dataset.original||''):'';
                   const title=(img?(img.alt||img.title||''):'') || a.getAttribute('title') || (a.innerText||'').trim();
-                  out.push({href:href,src:src,title:title});
+                  out.push({href:href,preview:preview,hd:preview,title:title});
                 }
               }
               return JSON.stringify(out);
