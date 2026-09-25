@@ -3,6 +3,8 @@ package com.cris.doamodgallery.data
 import android.content.Context
 import com.cris.doamodgallery.util.JsonFileStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -40,9 +42,9 @@ class GalleryRepository(context: Context) {
         if (source.isEmpty()) return@withContext source
         val semaphore = Semaphore(6)
         val out = source.toMutableList()
-        kotlinx.coroutines.coroutineScope {
+        coroutineScope {
             source.forEachIndexed { index, item ->
-                kotlinx.coroutines.launch {
+                launch {
                     semaphore.withPermit {
                         val updated = runCatching { resolveHdNoSave(item) }.getOrDefault(item)
                         synchronized(out) { out[index] = updated }
