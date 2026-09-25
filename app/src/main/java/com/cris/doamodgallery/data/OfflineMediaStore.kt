@@ -1,16 +1,14 @@
 package com.cris.doamodgallery.data
 
 import android.content.Context
-import kotlinx.coroutines.CoroutineScope
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
+import com.cris.doamodgallery.worker.OfflineThumbnailWorker
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.joinAll
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -20,52 +18,64 @@ import java.util.concurrent.TimeUnit
 
 object OfflineMediaStore {
     private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"
-    private const val BATCH_SIZE = 24
-    private const val THUMB_CONCURRENCY = 2
+    const val THUMB_WORK_NAME = "doa_offline_thumbnail_library"
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val syncLock = Any()
-    @Volatile private var thumbSyncJob: Job? = null
-    @Volatile private var thumbDone: Int = 0
-    @Volatile private var thumbTotal: Int = 0
+    @Volatile private var lastContext: Context? = null
+    @Volatile private var lastDone: Int = 0
+    @Volatile private var lastTotal: Int = 0
 
     /**
-     * Manual on purpose. v0.2.5 started thousands of downloads while the app was opening.
-     * v0.2.6 starts this only from the "Biblioteca offline" menu.
+     * Enqueue a persistent background job instead of starting thousands of coroutines in
+     * the application process. WorkManager keeps it alive safely when the app goes to the
+     * background and the worker exposes progress through an Android notification.
      */
     fun scheduleThumbnails(context: Context, items: List<ModItem>) {
         if (items.isEmpty()) return
         val app = context.applicationContext
-        synchronized(syncLock) {
-            thumbSyncJob?.cancel()
-            thumbDone = 0
-            thumbTotal = items.size
-            thumbSyncJob = scope.launch {
-                try {
-                    syncThumbnails(app, items)
-                } finally {
-                    synchronized(syncLock) {
-                        thumbSyncJob = null
-                    }
-                }
-            }
-        }
+        lastContext = app
+        lastDone = 0
+        lastTotal = items.size
+
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+        val request = OneTimeWorkRequestBuilder<OfflineThumbnailWorker>()
+            .setConstraints(constraints)
+            .addTag(THUMB_WORK_NAME)
+            .build()
+
+        WorkManager.getInstance(app).enqueueUniqueWork(
+            THUMB_WORK_NAME,
+            ExistingWorkPolicy.KEEP,
+            request
+        )
     }
 
     fun cancelThumbnailSync() {
-        synchronized(syncLock) {
-            thumbSyncJob?.cancel()
-            thumbSyncJob = null
-        }
+        lastContext?.let { WorkManager.getInstance(it).cancelUniqueWork(THUMB_WORK_NAME) }
     }
 
-    fun isThumbnailSyncRunning(): Boolean = thumbSyncJob?.isActive == true
-    fun thumbnailProgress(): Pair<Int, Int> = thumbDone to thumbTotal
+    fun isThumbnailSyncRunning(): Boolean {
+        val context = lastContext ?: return false
+        return runCatching {
+            WorkManager.getInstance(context)
+                .getWorkInfosForUniqueWork(THUMB_WORK_NAME)
+                .get(2, TimeUnit.SECONDS)
+                .any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.BLOCKED }
+        }.getOrDefault(false)
+    }
+
+    fun thumbnailProgress(): Pair<Int, Int> = lastDone to lastTotal
+
+    fun reportThumbnailProgress(done: Int, total: Int) {
+        lastDone = done
+        lastTotal = total
+    }
 
     fun thumbnailFile(context: Context, item: ModItem): File? {
         val url = item.previewUrl.ifBlank { item.hdUrl }
@@ -81,6 +91,16 @@ object OfflineMediaStore {
         return file.takeIf { it.isFile && it.length() > 0L }
     }
 
+    suspend fun ensureThumbnail(context: Context, item: ModItem): File? = withContext(Dispatchers.IO) {
+        val url = item.previewUrl.ifBlank { item.hdUrl }
+        if (url.isBlank()) return@withContext null
+        val dir = thumbDir(context)
+        dir.mkdirs()
+        val file = File(dir, mediaName(item.id, url))
+        if (file.isFile && file.length() > 0L) return@withContext file
+        if (download(url, file)) file else null
+    }
+
     suspend fun ensureHd(context: Context, item: ModItem): File? = withContext(Dispatchers.IO) {
         val url = item.hdUrl.ifBlank { item.previewUrl }
         if (url.isBlank()) return@withContext null
@@ -91,71 +111,41 @@ object OfflineMediaStore {
         if (download(url, file)) file else null
     }
 
-    fun storageBytes(context: Context): Long =
-        dirSize(thumbDir(context)) + dirSize(hdDir(context))
-
-    fun thumbnailBytes(context: Context): Long = dirSize(thumbDir(context))
-    fun hdBytes(context: Context): Long = dirSize(hdDir(context))
-    fun thumbnailCount(context: Context): Int = thumbDir(context).listFiles()?.count { it.isFile && !it.name.endsWith(".part") } ?: 0
-    fun hdCount(context: Context): Int = hdDir(context).listFiles()?.count { it.isFile && !it.name.endsWith(".part") } ?: 0
-
-    fun clearThumbnails(context: Context) {
-        cancelThumbnailSync()
-        thumbDir(context).deleteRecursively()
-        thumbDone = 0
-        thumbTotal = 0
-    }
-
-    fun clearHd(context: Context) {
-        hdDir(context).deleteRecursively()
-    }
-
-    private suspend fun syncThumbnails(context: Context, items: List<ModItem>) {
-        val dir = thumbDir(context)
-        dir.mkdirs()
-
+    fun cleanupStaleThumbnails(context: Context, items: List<ModItem>) {
         val liveNames = items.mapNotNull { item ->
             val url = item.previewUrl.ifBlank { item.hdUrl }
             url.takeIf { it.isNotBlank() }?.let { mediaName(item.id, it) }
         }.toHashSet()
-
-        val semaphore = Semaphore(THUMB_CONCURRENCY)
-        for (batch in items.chunked(BATCH_SIZE)) {
-            coroutineScope {
-                batch.map { item ->
-                    launch {
-                        semaphore.withPermit {
-                            val url = item.previewUrl.ifBlank { item.hdUrl }
-                            if (url.isNotBlank()) {
-                                val dest = File(dir, mediaName(item.id, url))
-                                if (!dest.isFile || dest.length() <= 0L) {
-                                    runCatching { download(url, dest) }
-                                }
-                            }
-                            thumbDone += 1
-                        }
-                    }
-                }.joinAll()
-            }
-            delay(80)
-        }
-
-        dir.listFiles()?.forEach { file ->
+        thumbDir(context).listFiles()?.forEach { file ->
             if (file.isFile && file.name !in liveNames && !file.name.endsWith(".part")) {
                 runCatching { file.delete() }
             }
         }
     }
 
+    fun storageBytes(context: Context): Long = dirSize(thumbDir(context)) + dirSize(hdDir(context))
+    fun thumbnailBytes(context: Context): Long = dirSize(thumbDir(context))
+    fun hdBytes(context: Context): Long = dirSize(hdDir(context))
+    fun thumbnailCount(context: Context): Int = thumbDir(context).listFiles()?.count { it.isFile && !it.name.endsWith(".part") } ?: 0
+    fun hdCount(context: Context): Int = hdDir(context).listFiles()?.count { it.isFile && !it.name.endsWith(".part") } ?: 0
+
+    fun clearThumbnails(context: Context) {
+        lastContext = context.applicationContext
+        cancelThumbnailSync()
+        thumbDir(context).deleteRecursively()
+        lastDone = 0
+        lastTotal = 0
+    }
+
+    fun clearHd(context: Context) {
+        hdDir(context).deleteRecursively()
+    }
+
     private fun download(url: String, dest: File): Boolean {
         dest.parentFile?.mkdirs()
         val tmp = File(dest.parentFile, dest.name + ".part")
         runCatching { if (tmp.exists()) tmp.delete() }
-
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", USER_AGENT)
-            .build()
+        val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
 
         return try {
             http.newCall(request).execute().use { response ->
@@ -192,7 +182,5 @@ object OfflineMediaStore {
     private fun root(context: Context): File = File(context.applicationContext.filesDir, "gallery_media")
     private fun thumbDir(context: Context): File = File(root(context), "thumbs")
     private fun hdDir(context: Context): File = File(root(context), "hd")
-
-    private fun dirSize(dir: File): Long =
-        if (!dir.exists()) 0L else dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    private fun dirSize(dir: File): Long = if (!dir.exists()) 0L else dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
 }
