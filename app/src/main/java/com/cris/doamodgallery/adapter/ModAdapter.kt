@@ -66,12 +66,16 @@ class ModAdapter(
 
             val width = targetCardWidth()
             val height = targetImageHeight(width)
-            b.image.load(item.hdUrl.ifBlank { item.previewUrl }) {
+
+            // Grid uses the lightweight thumbnail. Full HD is reserved for DetailActivity.
+            // This avoids downloading/decoding dozens of multi-megabyte originals while scrolling.
+            b.image.load(item.previewUrl.ifBlank { item.hdUrl }) {
                 crossfade(false)
                 precision(Precision.INEXACT)
                 size(width.coerceAtLeast(1), height.coerceAtLeast(1))
                 memoryCachePolicy(CachePolicy.ENABLED)
                 diskCachePolicy(CachePolicy.ENABLED)
+                networkCachePolicy(CachePolicy.ENABLED)
                 placeholder(R.color.surface_2)
                 error(R.color.surface_2)
             }
