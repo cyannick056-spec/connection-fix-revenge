@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.view.View
+import android.view.inputmethod.InputMethodManager
 import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -29,6 +30,7 @@ import com.cris.doamodgallery.scanner.PostimagesGalleryScanner
 import com.cris.doamodgallery.update.AppUpdater
 import com.cris.doamodgallery.util.TextUtils
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
@@ -45,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private var showFavorites = false
     private var busy = false
     private var pendingUpdatePath: String? = null
+    private var searchJob: Job? = null
 
     private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -78,6 +81,9 @@ class MainActivity : AppCompatActivity() {
         grid = GridLayoutManager(this, uiSettings.resolvedColumns(resources.configuration.screenWidthDp))
         b.recycler.layoutManager = grid
         b.recycler.adapter = adapter
+        b.recycler.setHasFixedSize(true)
+        b.recycler.setItemViewCacheSize(12)
+        b.recycler.itemAnimator = null
         adapter.setColumns(grid.spanCount)
 
         setupSpinner()
@@ -113,6 +119,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun setupSpinner() {
         refreshCharacterSpinner()
+        b.characterSpinner.setOnTouchListener { _, _ ->
+            b.search.clearFocus()
+            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.hideSoftInputFromWindow(b.search.windowToken, 0)
+            false
+        }
         b.characterSpinner.onItemSelectedListener = SimpleItemSelectedListener { render() }
     }
 
@@ -135,12 +147,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun cacheNeedsRepair(items: List<ModItem>): Boolean {
         if (items.isEmpty()) return true
-        val idTitles = items.count { TextUtils.looksLikePostId(it.title) }
-        return items.size < 1000 || idTitles > maxOf(5, items.size / 20)
+        val badTitles = items.count { it.title == "Sin título verificado" || TextUtils.looksLikePostId(it.title) }
+        // Esta galería tiene ~3379 entradas. Una caché de 432/1968 no vuelve a
+        // considerarse válida y se reconstruye automáticamente.
+        return items.size < 3300 || badTitles > maxOf(5, items.size / 50)
     }
 
     private fun setupUi() {
-        b.search.doAfterTextChanged { render() }
+        b.search.doAfterTextChanged {
+            searchJob?.cancel()
+            searchJob = lifecycleScope.launch {
+                delay(180)
+                render()
+            }
+        }
         b.favoritesButton.setOnClickListener {
             showFavorites = !showFavorites
             b.favoritesButton.text = if (showFavorites) "★" else "☆"
@@ -298,18 +318,25 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun render() {
+        val all = gallery.current()
         val q = b.search.text?.toString().orEmpty()
         val selected = b.characterSpinner.selectedItem?.toString().orEmpty()
             .takeUnless { it == getString(R.string.all_characters) }.orEmpty()
         val favs = favorites.all()
-        val filtered = gallery.current().filter { item ->
-            val text = "${item.title} ${item.character} ${item.megaName}"
-            TextUtils.tokenMatch(q, text) &&
-                (selected.isBlank() || item.character == selected) &&
-                (!showFavorites || item.id in favs)
+
+        val filtered = if (q.isBlank() && selected.isBlank() && !showFavorites) {
+            all
+        } else {
+            all.filter { item ->
+                val text = "${item.title} ${item.character} ${item.megaName}"
+                TextUtils.tokenMatch(q, text) &&
+                    (selected.isBlank() || item.character == selected) &&
+                    (!showFavorites || item.id in favs)
+            }
         }
+
         adapter.submit(filtered, favs)
-        if (!busy) b.statusText.text = "${filtered.size} de ${gallery.current().size} skins"
+        if (!busy) b.statusText.text = "${filtered.size} de ${all.size} skins"
     }
 
     private fun refreshGallery(autoMega: Boolean) {
@@ -341,7 +368,8 @@ class MainActivity : AppCompatActivity() {
                 render()
                 if (autoMega) syncMegaInternal()
             } catch (e: Exception) {
-                b.statusText.text = "Error actualizando galería: ${e.message}"
+                b.statusText.text = "Escaneo incompleto: ${e.message}"
+                Toast.makeText(this@MainActivity, "No se guardó una galería parcial.", Toast.LENGTH_LONG).show()
             } finally {
                 busy = false
                 b.progress.visibility = View.GONE
