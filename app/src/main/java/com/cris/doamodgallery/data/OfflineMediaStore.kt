@@ -5,8 +5,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
@@ -20,8 +20,8 @@ import java.util.concurrent.TimeUnit
 
 object OfflineMediaStore {
     private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/140 Mobile Safari/537.36"
-    private const val BATCH_SIZE = 64
-    private const val THUMB_CONCURRENCY = 4
+    private const val BATCH_SIZE = 24
+    private const val THUMB_CONCURRENCY = 2
 
     private val http = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
@@ -31,17 +31,41 @@ object OfflineMediaStore {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val syncLock = Any()
     @Volatile private var thumbSyncJob: Job? = null
+    @Volatile private var thumbDone: Int = 0
+    @Volatile private var thumbTotal: Int = 0
 
+    /**
+     * Manual on purpose. v0.2.5 started thousands of downloads while the app was opening.
+     * v0.2.6 starts this only from the "Biblioteca offline" menu.
+     */
     fun scheduleThumbnails(context: Context, items: List<ModItem>) {
         if (items.isEmpty()) return
         val app = context.applicationContext
         synchronized(syncLock) {
             thumbSyncJob?.cancel()
+            thumbDone = 0
+            thumbTotal = items.size
             thumbSyncJob = scope.launch {
-                syncThumbnails(app, items)
+                try {
+                    syncThumbnails(app, items)
+                } finally {
+                    synchronized(syncLock) {
+                        thumbSyncJob = null
+                    }
+                }
             }
         }
     }
+
+    fun cancelThumbnailSync() {
+        synchronized(syncLock) {
+            thumbSyncJob?.cancel()
+            thumbSyncJob = null
+        }
+    }
+
+    fun isThumbnailSyncRunning(): Boolean = thumbSyncJob?.isActive == true
+    fun thumbnailProgress(): Pair<Int, Int> = thumbDone to thumbTotal
 
     fun thumbnailFile(context: Context, item: ModItem): File? {
         val url = item.previewUrl.ifBlank { item.hdUrl }
@@ -72,9 +96,14 @@ object OfflineMediaStore {
 
     fun thumbnailBytes(context: Context): Long = dirSize(thumbDir(context))
     fun hdBytes(context: Context): Long = dirSize(hdDir(context))
+    fun thumbnailCount(context: Context): Int = thumbDir(context).listFiles()?.count { it.isFile && !it.name.endsWith(".part") } ?: 0
+    fun hdCount(context: Context): Int = hdDir(context).listFiles()?.count { it.isFile && !it.name.endsWith(".part") } ?: 0
 
     fun clearThumbnails(context: Context) {
+        cancelThumbnailSync()
         thumbDir(context).deleteRecursively()
+        thumbDone = 0
+        thumbTotal = 0
     }
 
     fun clearHd(context: Context) {
@@ -97,15 +126,18 @@ object OfflineMediaStore {
                     launch {
                         semaphore.withPermit {
                             val url = item.previewUrl.ifBlank { item.hdUrl }
-                            if (url.isBlank()) return@withPermit
-                            val dest = File(dir, mediaName(item.id, url))
-                            if (!dest.isFile || dest.length() <= 0L) {
-                                runCatching { download(url, dest) }
+                            if (url.isNotBlank()) {
+                                val dest = File(dir, mediaName(item.id, url))
+                                if (!dest.isFile || dest.length() <= 0L) {
+                                    runCatching { download(url, dest) }
+                                }
                             }
+                            thumbDone += 1
                         }
                     }
                 }.joinAll()
             }
+            delay(80)
         }
 
         dir.listFiles()?.forEach { file ->
