@@ -21,8 +21,8 @@ android {
         applicationId = "com.cris.doamodgallery"
         minSdk = 28
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.2.3-alpha"
+        versionCode = 8
+        versionName = "0.2.6-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
