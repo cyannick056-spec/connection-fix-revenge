@@ -24,7 +24,6 @@
         android:layout_marginTop="6dp"
         android:background="@drawable/bg_field"
         android:hint="@string/search_hint"
-        android:hintTextColor="@color/text_secondary"
         android:paddingHorizontal="14dp"
         android:singleLine="true"
         android:textColor="@color/text_primary"
