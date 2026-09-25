@@ -1,12 +1,15 @@
-# Discord Performance
+# DOA Mod Gallery Android
 
-Plugin ligero para Discord 338.13 (6021) con Revenge en Android 13.
+Versión Android de DOA Mod Gallery.
 
-- Acorta animaciones y rebotes largos.
-- Elimina sombras y elevación creadas después de cargar.
-- Reduce reproducción automática cuando Discord expone esos ajustes.
-- No modifica voz, red, mensajes ni navegación.
-- Restaura los parches al desactivarlo.
+- Galería de mods con imágenes HD
+- Búsqueda y filtro por personaje
+- Favoritos
+- 3 o 4 columnas configurables
+- Tema oscuro/claro/sistema
+- Sincronización y descarga desde MEGA
+- Actualizaciones mediante APK
+- Sin blur
 
-Busca reducir tirones de la interfaz con cambios conservadores; no promete aumentar la potencia física del teléfono.
-
+## APK
+Cada push a `main` ejecuta **Build Android APK**. El APK aparece en **Actions → ejecución → Artifacts** como `DOA-Mod-Gallery-Android-v0.2`.

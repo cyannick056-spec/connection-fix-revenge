@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">DOA Mod Gallery</string>
+    <string name="search_hint">Buscar: Honoka, City Light, bikini…</string>
+    <string name="all_characters">Todos los personajes</string>
+    <string name="favorites">Favoritos</string>
+    <string name="refresh_gallery">Actualizar galería</string>
+    <string name="sync_mega">Sincronizar MEGA</string>
+    <string name="improve_hd">Mejorar imágenes HD</string>
+    <string name="download_folder">Carpeta de descargas</string>
+</resources>

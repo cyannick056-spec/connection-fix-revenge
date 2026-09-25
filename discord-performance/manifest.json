@@ -1,9 +1,0 @@
-{
-  "name": "Discord Performance",
-  "description": "Reduce animaciones, sombras y efectos automáticos para mejorar la fluidez y estabilidad.",
-  "authors": [{ "name": "Cris + Codex", "id": "0" }],
-  "main": "index.js",
-  "hash": "GENERATED_BY_WORKFLOW",
-  "vendetta": { "icon": "ic_speed_24px" }
-}
-
