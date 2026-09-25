@@ -4,10 +4,6 @@ import java.text.Normalizer
 import kotlin.math.max
 
 object TextUtils {
-    // Known names are still useful for MEGA matching, but a gallery category is only
-    // accepted when the character name appears at the END of the canonical post title.
-    // This prevents source-outfit names such as "Amy DOAXVV ... Hitomi" from creating
-    // an incorrect Amy category when the actual target is Hitomi.
     val characters = listOf(
         "Marie Rose","Phase 4","Alpha-152","Naotora Ii","Mai Shiranui","Ryu Hayabusa","Brad Wong","Jann Lee","La Mariposa",
         "Honoka","Kasumi","Ayane","Hitomi","Leifang","Kokoro","Helena","Christie","Tina","Mila","Lisa","Rachel","Momiji",
@@ -30,16 +26,28 @@ object TextUtils {
         return n.replace(Regex("\\s+"), " ")
     }
 
-    fun detectCharacter(text: String): String {
-        val cleaned = normalize(cleanPostTitle(text))
-        if (cleaned.isBlank()) return ""
+    fun prettyTitle(value: String): String = cleanPostTitle(value)
+        .replace(Regex("[-_]+"), " ")
+        .replace(Regex("\\s+"), " ")
+        .trim()
 
-        // Funnybunny's naming convention places the target character at the end.
-        // Only accepting a suffix prevents outfit/source names from polluting filters.
-        return characters
-            .map { it to normalize(it) }
-            .filter { (_, cn) -> cleaned == cn || cleaned.endsWith(" $cn") }
-            .maxByOrNull { (_, cn) -> cn.length }
+    /**
+     * Funnybunny often names a source outfit first and the target character last:
+     * "Amy DOAX3 Daiquiri Ayane". Other posts use the target first:
+     * "Honoka DOAXVV Moonlight" or "HAIR Honoka ...".
+     *
+     * We therefore choose the LAST known character occurrence in the canonical title.
+     * If only Honoka is present, Honoka wins; if both Amy and Ayane are present, Ayane wins.
+     */
+    fun detectCharacter(text: String): String {
+        val n = " ${normalize(cleanPostTitle(text))} "
+        if (n.isBlank()) return ""
+
+        return characters.mapNotNull { character ->
+            val cn = normalize(character)
+            val index = n.lastIndexOf(" $cn ")
+            if (index >= 0) Triple(character, index, cn.length) else null
+        }.maxWithOrNull(compareBy<Triple<String, Int, Int>> { it.second }.thenBy { it.third })
             ?.first
             .orEmpty()
     }
@@ -57,6 +65,52 @@ object TextUtils {
         return v.matches(Regex("[A-Za-z0-9]{6,12}")) && v.none { it == ' ' || it == '-' || it == '_' }
     }
 
+    /**
+     * Search used by Android. It deliberately ignores MEGA metadata; MEGA filenames can
+     * describe a different source/variant and were causing searches such as "Honoka" to
+     * show Ayane/Hitomi cards.
+     *
+     * Rules:
+     * - A query that is exactly a character name becomes an exact character search.
+     * - Otherwise all query words must match the title/character (AND search).
+     * - Full phrases and prefixes rank above loose token-prefix matches.
+     * Returns -1 when the item does not match.
+     */
+    fun searchScore(query: String, title: String, character: String): Int {
+        val q = normalize(query)
+        if (q.isBlank()) return 0
+
+        val t = normalize(title)
+        val c = normalize(character)
+
+        val exactCharacter = characters.firstOrNull { normalize(it) == q }
+        if (exactCharacter != null) {
+            return if (c == q) 10_000 else -1
+        }
+
+        if (t == q) return 9_500
+        if (t.startsWith("$q ") || t.startsWith(q)) return 9_000
+        if ((" $t ").contains(" $q ")) return 8_500
+
+        val needles = q.split(' ').filter { it.isNotBlank() }
+        if (needles.isEmpty()) return 0
+        val titleTokens = t.split(' ').filter { it.isNotBlank() }
+        val charTokens = c.split(' ').filter { it.isNotBlank() }
+        val haystack = titleTokens + charTokens
+
+        var score = 0
+        for (needle in needles) {
+            val exact = haystack.any { it == needle }
+            val prefix = needle.length >= 3 && haystack.any { it.startsWith(needle) }
+            if (!exact && !prefix) return -1
+            score += if (exact) 700 else 420
+        }
+
+        if (c.isNotBlank() && needles.any { it == c }) score += 1_500
+        if (needles.all { it in titleTokens }) score += 900
+        return score
+    }
+
     fun tokenMatch(query: String, text: String): Boolean {
         val q = normalize(query)
         if (q.isBlank()) return true
@@ -67,7 +121,7 @@ object TextUtils {
         val ts = t.split(' ').filter { it.isNotBlank() }
         return qs.all { needle ->
             ts.any { token ->
-                token == needle || token.startsWith(needle) || needle.startsWith(token)
+                token == needle || (needle.length >= 3 && token.startsWith(needle))
             }
         }
     }
