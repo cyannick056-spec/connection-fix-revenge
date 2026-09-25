@@ -24,31 +24,24 @@ class GalleryRepository(context: Context) {
 
     @Volatile private var cache: AppCache = store.read("gallery.json", AppCache::class.java, AppCache())
 
-    init {
-        // v0.2.5+: build a real persistent offline thumbnail library in the background.
-        // Existing files are skipped, so subsequent launches do not re-download them.
-        OfflineMediaStore.scheduleThumbnails(appContext, cache.items)
-    }
-
     fun current(): List<ModItem> = cache.items
 
+    /**
+     * Persist metadata only.
+     *
+     * v0.2.5 also kicked off thousands of thumbnail downloads from here. That made every
+     * metadata save capable of saturating the phone. Offline media is now explicitly
+     * user-controlled from the main menu.
+     */
     fun save(items: List<ModItem>) {
         cache = AppCache(items, System.currentTimeMillis())
         store.write("gallery.json", cache)
-        // Incremental: new/changed preview URLs get a new deterministic local file;
-        // everything already downloaded is skipped.
-        OfflineMediaStore.scheduleThumbnails(appContext, items)
     }
 
     fun updateOne(item: ModItem) {
         save(cache.items.map { if (it.id == item.id) item else it })
     }
 
-    /**
-     * Cheap local migration for old caches. v0.2.3 had correct 3379 entries but the
-     * character parser was intentionally too strict, so the spinner only exposed a few
-     * names. Rebuild the visible title + target character without re-downloading anything.
-     */
     fun reindexLocalMetadata(): Boolean {
         val source = cache.items
         if (source.isEmpty()) return false
@@ -99,7 +92,7 @@ class GalleryRepository(context: Context) {
     suspend fun enrichAllHd(onProgress: (Int, Int) -> Unit): List<ModItem> = withContext(Dispatchers.IO) {
         val source = cache.items
         if (source.isEmpty()) return@withContext source
-        val semaphore = Semaphore(6)
+        val semaphore = Semaphore(4)
         val out = source.toMutableList()
         coroutineScope {
             source.forEachIndexed { index, item ->
