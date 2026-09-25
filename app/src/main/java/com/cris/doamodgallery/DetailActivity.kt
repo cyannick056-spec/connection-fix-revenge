@@ -14,6 +14,7 @@ import coil.load
 import com.cris.doamodgallery.data.FavoritesStore
 import com.cris.doamodgallery.data.GalleryRepository
 import com.cris.doamodgallery.data.ModItem
+import com.cris.doamodgallery.data.OfflineMediaStore
 import com.cris.doamodgallery.databinding.ActivityDetailBinding
 import com.cris.doamodgallery.worker.MegaDownloadWorker
 import kotlinx.coroutines.launch
@@ -53,7 +54,7 @@ class DetailActivity : AppCompatActivity() {
         b.downloadButton.setOnClickListener { startDownload() }
 
         render(item!!)
-        resolveHd()
+        cacheHdLocally()
     }
 
     override fun onResume() {
@@ -66,11 +67,19 @@ class DetailActivity : AppCompatActivity() {
         b.toolbar.title = mod.title
         b.title.text = mod.title
         b.character.text = mod.character
-        b.image.load(mod.hdUrl.ifBlank { mod.previewUrl }) {
+
+        // HD opened once is kept permanently inside the app. Before it exists we can
+        // instantly show the persistent thumbnail, then replace it when HD finishes.
+        val source: Any = OfflineMediaStore.hdFile(this, mod)
+            ?: OfflineMediaStore.thumbnailFile(this, mod)
+            ?: mod.hdUrl.ifBlank { mod.previewUrl }
+
+        b.image.load(source) {
             crossfade(true)
             placeholder(R.color.surface_2)
             error(R.color.surface_2)
         }
+
         if (mod.megaHandle.isNotBlank()) {
             b.megaInfo.text = "✅ Descarga localizada en MEGA: ${mod.megaName}"
             b.downloadButton.isEnabled = true
@@ -88,12 +97,27 @@ class DetailActivity : AppCompatActivity() {
         b.favoriteButton.text = if (favorites.isFavorite(mod.id)) "★ Quitar de favoritos" else "☆ Favorito"
     }
 
-    private fun resolveHd() {
-        val mod = item ?: return
-        if (mod.hdUrl.isNotBlank()) return
+    private fun cacheHdLocally() {
+        val original = item ?: return
         lifecycleScope.launch {
-            runCatching { gallery.resolveHd(mod) }
-                .onSuccess { updated -> render(updated) }
+            val resolved = if (original.hdUrl.isBlank()) {
+                runCatching { gallery.resolveHd(original) }.getOrDefault(original)
+            } else original
+
+            item = resolved
+            val local = runCatching {
+                OfflineMediaStore.ensureHd(this@DetailActivity, resolved)
+            }.getOrNull()
+
+            if (local != null) {
+                b.image.load(local) {
+                    crossfade(true)
+                    placeholder(R.color.surface_2)
+                    error(R.color.surface_2)
+                }
+            } else if (resolved != original) {
+                render(resolved)
+            }
         }
     }
 
