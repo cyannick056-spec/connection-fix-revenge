@@ -26,9 +26,12 @@ import com.cris.doamodgallery.data.ModItem
 import com.cris.doamodgallery.data.SettingsStore
 import com.cris.doamodgallery.databinding.ActivityMainBinding
 import com.cris.doamodgallery.scanner.PostimagesGalleryScanner
+import com.cris.doamodgallery.update.AppUpdater
 import com.cris.doamodgallery.util.TextUtils
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
     private lateinit var b: ActivityMainBinding
@@ -36,11 +39,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var mega: MegaIndexRepository
     private lateinit var favorites: FavoritesStore
     private lateinit var uiSettings: SettingsStore
+    private lateinit var updater: AppUpdater
     private lateinit var adapter: ModAdapter
     private lateinit var grid: GridLayoutManager
     private var showFavorites = false
     private var busy = false
-    private var pendingPatchUri: Uri? = null
+    private var pendingUpdatePath: String? = null
 
     private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -55,13 +59,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private val patchPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            pendingPatchUri = uri
-            installPatchApk(uri)
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         b = ActivityMainBinding.inflate(layoutInflater)
@@ -71,6 +68,7 @@ class MainActivity : AppCompatActivity() {
         mega = MegaIndexRepository(this)
         favorites = FavoritesStore(this)
         uiSettings = SettingsStore(this)
+        updater = AppUpdater(this)
 
         adapter = ModAdapter(
             onOpen = { openDetail(it) },
@@ -92,6 +90,11 @@ class MainActivity : AppCompatActivity() {
         } else {
             render()
         }
+
+        lifecycleScope.launch {
+            delay(2500)
+            checkForAppUpdate(forceMessage = false)
+        }
     }
 
     override fun onResume() {
@@ -100,11 +103,11 @@ class MainActivity : AppCompatActivity() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
             packageManager.canRequestPackageInstalls() &&
-            pendingPatchUri != null
+            pendingUpdatePath != null
         ) {
-            val uri = pendingPatchUri
-            pendingPatchUri = null
-            uri?.let { launchPackageInstaller(it) }
+            val file = File(pendingUpdatePath!!)
+            pendingUpdatePath = null
+            if (file.exists()) launchDownloadedInstaller(file)
         }
     }
 
@@ -151,7 +154,7 @@ class MainActivity : AppCompatActivity() {
                 R.id.action_folder -> { folderPicker.launch(null); true }
                 R.id.action_columns -> { showColumnsDialog(); true }
                 R.id.action_theme -> { showThemeDialog(); true }
-                R.id.action_patch -> { choosePatchApk(); true }
+                R.id.action_patch -> { checkForAppUpdate(forceMessage = true); true }
                 else -> false
             }
         }
@@ -197,36 +200,92 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun choosePatchApk() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle("Instalar parche / actualización")
-            .setMessage("Selecciona un APK de DOA Mod Gallery Android. Android lo instalará encima de esta versión y conservará tus datos si el APK usa el mismo package y la misma firma.")
-            .setNegativeButton("Cancelar", null)
-            .setPositiveButton("Elegir APK") { _, _ ->
-                patchPicker.launch(arrayOf("application/vnd.android.package-archive", "application/octet-stream"))
-            }
-            .show()
+    private fun checkForAppUpdate(forceMessage: Boolean) {
+        lifecycleScope.launch {
+            runCatching { updater.latest() }
+                .onSuccess { info ->
+                    if (updater.isNewer(info)) {
+                        MaterialAlertDialogBuilder(this@MainActivity)
+                            .setTitle("Actualización ${info.versionName}")
+                            .setMessage("Hay una versión nueva. La app puede descargar el APK aquí mismo y abrir el instalador de Android.")
+                            .setNegativeButton("Ahora no", null)
+                            .setPositiveButton("Descargar") { _, _ -> downloadAppUpdate(info) }
+                            .show()
+                    } else if (forceMessage) {
+                        Toast.makeText(this@MainActivity, "Ya tienes la versión más reciente.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .onFailure { e ->
+                    if (forceMessage) {
+                        MaterialAlertDialogBuilder(this@MainActivity)
+                            .setTitle("No pude comprobar actualizaciones")
+                            .setMessage(e.message ?: "Error desconocido")
+                            .setPositiveButton("Aceptar", null)
+                            .show()
+                    }
+                }
+        }
     }
 
-    private fun installPatchApk(uri: Uri) {
+    private fun downloadAppUpdate(info: AppUpdater.UpdateInfo) {
+        if (busy) {
+            Toast.makeText(this, "Espera a que termine la tarea actual.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        busy = true
+        b.progress.visibility = View.VISIBLE
+        lifecycleScope.launch {
+            try {
+                val file = updater.download(info) { pct ->
+                    runOnUiThread {
+                        b.progress.progress = pct
+                        b.statusText.text = "Descargando actualización ${info.versionName}… $pct%"
+                    }
+                }
+
+                if (!updater.signaturesMatch(file)) {
+                    MaterialAlertDialogBuilder(this@MainActivity)
+                        .setTitle("Firma de actualización diferente")
+                        .setMessage(
+                            "Android no permite actualizar una app con una firma diferente. " +
+                                "Esta protección evita el mensaje genérico de «No se pudo instalar». " +
+                                "Instala una vez la versión estable firmada y, desde entonces, las siguientes actualizaciones serán compatibles."
+                        )
+                        .setPositiveButton("Aceptar", null)
+                        .show()
+                    b.statusText.text = "La actualización se descargó, pero la firma no coincide."
+                    return@launch
+                }
+
+                requestInstallDownloaded(file)
+            } catch (e: Exception) {
+                b.statusText.text = "Error descargando actualización: ${e.message}"
+            } finally {
+                busy = false
+                b.progress.visibility = View.GONE
+            }
+        }
+    }
+
+    private fun requestInstallDownloaded(file: File) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
-            pendingPatchUri = uri
+            pendingUpdatePath = file.absolutePath
             MaterialAlertDialogBuilder(this)
                 .setTitle("Permitir actualizaciones")
-                .setMessage("Android necesita permitir que DOA Mod Gallery instale actualizaciones. Activa «Permitir desde esta fuente» y vuelve a la app.")
-                .setNegativeButton("Cancelar") { _, _ -> pendingPatchUri = null }
+                .setMessage("Activa «Permitir desde esta fuente» para que DOA Mod Gallery pueda abrir sus actualizaciones descargadas.")
+                .setNegativeButton("Cancelar") { _, _ -> pendingUpdatePath = null }
                 .setPositiveButton("Abrir ajuste") { _, _ ->
                     startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
                 }
                 .show()
             return
         }
-        pendingPatchUri = null
-        launchPackageInstaller(uri)
+        launchDownloadedInstaller(file)
     }
 
-    private fun launchPackageInstaller(uri: Uri) {
+    private fun launchDownloadedInstaller(file: File) {
         runCatching {
+            val uri = updater.uriFor(file)
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -268,7 +327,7 @@ class MainActivity : AppCompatActivity() {
                 val merged = scanned.map { fresh ->
                     val prior = old[fresh.id]
                     if (prior == null) fresh else fresh.copy(
-                        hdUrl = prior.hdUrl,
+                        hdUrl = fresh.hdUrl.ifBlank { prior.hdUrl },
                         megaName = prior.megaName,
                         megaHandle = prior.megaHandle,
                         megaKeyBase64 = prior.megaKeyBase64,
@@ -357,8 +416,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestNotificationsIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            registerForActivityResult(ActivityResultContracts.RequestPermission()) {}.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+                .launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
 }
