@@ -50,7 +50,7 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             isFocusable = false
             translationX = dm.widthPixels * 2f
         }
-        host.addView(web, ViewGroup.LayoutParams(dm.widthPixels, dm.heightPixels.coerceAtLeast(1200)))
+        host.addView(web, ViewGroup.LayoutParams(dm.widthPixels, dm.heightPixels.coerceAtLeast(1400)))
 
         val loaded = CompletableDeferred<Unit>()
         web.webViewClient = object : WebViewClient() {
@@ -70,29 +70,38 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             var lastCount = -1
             var cycle = 0
 
-            // Postimages usa ThumbLoader y necesita desplazamiento REAL, no un salto instantáneo.
-            // Repetimos barridos suaves arriba→abajo; cada barrido puede ampliar el documento.
-            while (cycle < 20) {
+            // Esta galería concreta tiene más de 3300 entradas. No aceptamos una caché
+            // incompleta de 400/1900 como si el escaneo hubiera terminado.
+            while (cycle < MAX_LOAD_CYCLES) {
                 cycle++
-                eval(web, "window.scrollTo(0,0);'ok';")
-                delay(250)
+
+                // Intenta activar botones de carga si Postimages cambia entre lazy-load y botón.
+                eval(web, CLICK_MORE_JS)
+                delay(120)
+
+                // Cada vuelta recorre desde arriba hasta el fondo ACTUAL. Cuando Postimages
+                // agrega más tarjetas, la siguiente vuelta alcanza el nuevo fondo.
+                eval(web, "window.scrollTo(0,0);window.dispatchEvent(new Event('scroll'));'ok';")
+                delay(120)
                 eval(web, SMOOTH_TO_BOTTOM_JS)
-                delay(3700)
+                delay(2250)
+                eval(web, CLICK_MORE_JS)
+                delay(220)
                 mergeRows(best, eval(web, EXTRACT_JS))
 
                 var count = best.size
                 val domCount = evalInt(web, "document.querySelectorAll('#thumb-list > .col').length")
-                onProgress(
-                    (5 + (cycle * 3)).coerceAtMost(72),
-                    "Cargando galería completa… ${maxOf(count, domCount)} skins detectadas"
-                )
+                val shown = maxOf(count, domCount)
+                val loadPct = 5 + ((shown.coerceAtMost(EXPECTED_GALLERY_SIZE) * 66L) / EXPECTED_GALLERY_SIZE).toInt()
+                onProgress(loadPct.coerceIn(5, 72), "Forzando galería completa… $shown skins detectadas")
 
-                // Barrido de control, como el userscript de PostImg que evita quedarse en 48/432.
-                if (domCount > 48 || count > 48) {
+                // Cada pocas vueltas hacemos un barrido inverso. Esto reactiva ThumbLoader
+                // en WebView cuando deja de disparar IntersectionObserver cerca del fondo.
+                if (cycle % 5 == 0) {
                     eval(web, SMOOTH_TO_TOP_JS)
-                    delay(1100)
+                    delay(650)
                     eval(web, SMOOTH_TO_BOTTOM_JS)
-                    delay(3700)
+                    delay(2250)
                     mergeRows(best, eval(web, EXTRACT_JS))
                     count = best.size
                 }
@@ -100,17 +109,32 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
                 stableCycles = if (count == lastCount) stableCycles + 1 else 0
                 lastCount = count
 
-                // Nunca terminamos en los primeros ciclos: dejamos que ThumbLoader alcance lotes tardíos.
-                if (cycle >= 8 && stableCycles >= 4) break
+                // Solo damos por terminada la carga cuando ya alcanzamos el tamaño realista
+                // de esta galería Y además dejó de crecer durante varias vueltas.
+                if (count >= MIN_COMPLETE_ITEMS && stableCycles >= 6) break
+
+                // Si se atasca antes del mínimo, hacemos un nudge agresivo y seguimos.
+                if (count < MIN_COMPLETE_ITEMS && stableCycles >= 5) {
+                    eval(web, NUDGE_JS)
+                    delay(1900)
+                    mergeRows(best, eval(web, EXTRACT_JS))
+                    stableCycles = 0
+                }
             }
 
-            onProgress(76, "Organizando ${best.size} skins…")
+            if (best.size < MIN_COMPLETE_ITEMS) {
+                throw IllegalStateException(
+                    "Postimages solo entregó ${best.size} skins; se requieren al menos $MIN_COMPLETE_ITEMS. " +
+                        "No guardaré una biblioteca incompleta. Pulsa actualizar de nuevo con conexión estable."
+                )
+            }
+
+            onProgress(74, "Verificando nombres de ${best.size} skins…")
             val rows = best.values.toList()
             val done = AtomicInteger(0)
             val semaphore = Semaphore(6)
 
-            // Solo visitamos páginas individuales cuando faltan metadatos. Normalmente los data-* de
-            // #thumb-list ya traen nombre, key y URL directa, así que miles de requests desaparecen.
+            // Visitamos solo páginas cuyo nombre/imagen no pudo obtenerse de la tarjeta.
             val resolved = withContext(Dispatchers.IO) {
                 coroutineScope {
                     rows.map { row ->
@@ -121,10 +145,10 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
                                 } else row
 
                                 val n = done.incrementAndGet()
-                                if (n == 1 || n == rows.size || n % 50 == 0) {
-                                    val pct = 76 + ((n * 23L) / rows.size.coerceAtLeast(1)).toInt()
+                                if (n == 1 || n == rows.size || n % 75 == 0) {
+                                    val pct = 74 + ((n * 25L) / rows.size.coerceAtLeast(1)).toInt()
                                     withContext(Dispatchers.Main) {
-                                        onProgress(pct.coerceAtMost(99), "Preparando nombres… $n/${rows.size}")
+                                        onProgress(pct.coerceAtMost(99), "Verificando títulos… $n/${rows.size}")
                                     }
                                 }
                                 fixed
@@ -135,8 +159,11 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             }
 
             val result = resolved.map { r ->
-                val fallback = r.href.substringAfterLast('/')
-                val title = friendlyTitle(TextUtils.cleanPostTitle(r.title)).ifBlank { fallback }
+                // Nunca usamos el ID del post como nombre visible. Si Postimages no dio un
+                // título verificable, lo dejamos explícitamente sin verificar.
+                val canonical = TextUtils.cleanPostTitle(r.title).trim()
+                val title = canonical.takeIf { it.isNotBlank() && !TextUtils.looksLikePostId(it) }
+                    ?: "Sin título verificado"
                 ModItem(
                     id = r.href,
                     title = title,
@@ -148,7 +175,7 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             }.distinctBy { it.id }
                 .sortedBy { it.title.lowercase() }
 
-            onProgress(100, "Galería lista: ${result.size} skins")
+            onProgress(100, "Galería completa: ${result.size} skins")
             result
         } finally {
             host.removeView(web)
@@ -156,11 +183,6 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             web.destroy()
         }
     }
-
-    private fun friendlyTitle(value: String): String = value
-        .replace(Regex("[-_]+"), " ")
-        .replace(Regex("\\s+"), " ")
-        .trim()
 
     private fun mergeRows(best: LinkedHashMap<String, Row>, rawJson: String) {
         val array = runCatching { JSONArray(rawJson) }.getOrElse { JSONArray() }
@@ -241,9 +263,10 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
     companion object {
         const val GALLERY_URL = "https://postimg.cc/gallery/wtKYrM4"
         private const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0"
+        private const val MIN_COMPLETE_ITEMS = 3300
+        private const val EXPECTED_GALLERY_SIZE = 3379
+        private const val MAX_LOAD_CYCLES = 90
 
-        // La estructura real de Postimages. data-image es el key del post y data-hotlink/name/ext
-        // permiten construir la imagen directa sin abrir miles de páginas.
         val EXTRACT_JS = """
             (function(){
               const out=[];
@@ -260,8 +283,6 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
                 const title=name || (img?(img.alt||img.title||''):'') || (col.innerText||'').trim();
                 if(href) out.push({href:href,src:src,title:title});
               }
-
-              // Fallback para cambios futuros del HTML.
               if(out.length===0){
                 for(const a of document.querySelectorAll('a[href^="https://postimg.cc/"]')){
                   const href=(a.href||'').replace(/\/$/,'');
@@ -276,12 +297,26 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             })();
         """.trimIndent()
 
+        val CLICK_MORE_JS = """
+            (function(){
+              let clicked=0;
+              for(const el of document.querySelectorAll('button,a')){
+                const t=((el.innerText||el.textContent||'')+'').trim().toLowerCase();
+                if(t.includes('load more')||t.includes('show more')||t.includes('cargar más')||t.includes('mostrar más')){
+                  try{ el.click(); clicked++; }catch(e){}
+                }
+              }
+              window.dispatchEvent(new Event('scroll'));
+              return String(clicked);
+            })();
+        """.trimIndent()
+
         val SMOOTH_TO_BOTTOM_JS = """
             (function(){
               const start=window.pageYOffset;
               const target=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);
               const distance=target-start;
-              const duration=3000;
+              const duration=1800;
               const t0=performance.now();
               function step(now){
                 const p=Math.min((now-t0)/duration,1);
@@ -299,17 +334,29 @@ class PostimagesGalleryScanner(private val activity: Activity, private val host:
             (function(){
               const start=window.pageYOffset;
               const distance=-start;
-              const duration=800;
+              const duration=550;
               const t0=performance.now();
               function step(now){
                 const p=Math.min((now-t0)/duration,1);
-                const e=p<0.5?4*p*p*p:1-Math.pow(-2*p+2,3)/2;
-                window.scrollTo(0,start+distance*e);
+                window.scrollTo(0,start+distance*p);
                 window.dispatchEvent(new Event('scroll'));
                 if(p<1) requestAnimationFrame(step);
               }
               requestAnimationFrame(step);
               return 'started';
+            })();
+        """.trimIndent()
+
+        val NUDGE_JS = """
+            (function(){
+              const h=Math.max(document.body.scrollHeight,document.documentElement.scrollHeight);
+              const v=Math.max(window.innerHeight,800);
+              window.scrollTo(0,Math.max(0,h-v*4));
+              window.dispatchEvent(new Event('scroll'));
+              setTimeout(()=>{window.scrollTo(0,h);window.dispatchEvent(new Event('scroll'));},250);
+              setTimeout(()=>{window.scrollBy(0,-v);window.dispatchEvent(new Event('scroll'));},550);
+              setTimeout(()=>{window.scrollTo(0,Math.max(document.body.scrollHeight,document.documentElement.scrollHeight));window.dispatchEvent(new Event('scroll'));},900);
+              return 'nudged';
             })();
         """.trimIndent()
     }
