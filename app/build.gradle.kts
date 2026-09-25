@@ -7,17 +7,30 @@ android {
     namespace = "com.cris.doamodgallery"
     compileSdk = 35
 
+    val stableKeyStore = rootProject.file("ci/doa-dev.keystore")
+    val stableDebug = if (stableKeyStore.exists()) {
+        signingConfigs.create("stableDebug") {
+            storeFile = stableKeyStore
+            storePassword = "doa-gallery-dev"
+            keyAlias = "doa-gallery"
+            keyPassword = "doa-gallery-dev"
+        }
+    } else null
+
     defaultConfig {
         applicationId = "com.cris.doamodgallery"
         minSdk = 28
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0-alpha"
+        versionCode = 3
+        versionName = "0.2.1-alpha"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
+        debug {
+            if (stableDebug != null) signingConfig = stableDebug
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
