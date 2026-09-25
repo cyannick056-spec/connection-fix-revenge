@@ -15,7 +15,8 @@ import org.jsoup.Jsoup
 import java.util.concurrent.TimeUnit
 
 class GalleryRepository(context: Context) {
-    private val store = JsonFileStore(context)
+    private val appContext = context.applicationContext
+    private val store = JsonFileStore(appContext)
     private val http = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -23,11 +24,20 @@ class GalleryRepository(context: Context) {
 
     @Volatile private var cache: AppCache = store.read("gallery.json", AppCache::class.java, AppCache())
 
+    init {
+        // v0.2.5+: build a real persistent offline thumbnail library in the background.
+        // Existing files are skipped, so subsequent launches do not re-download them.
+        OfflineMediaStore.scheduleThumbnails(appContext, cache.items)
+    }
+
     fun current(): List<ModItem> = cache.items
 
     fun save(items: List<ModItem>) {
         cache = AppCache(items, System.currentTimeMillis())
         store.write("gallery.json", cache)
+        // Incremental: new/changed preview URLs get a new deterministic local file;
+        // everything already downloaded is skipped.
+        OfflineMediaStore.scheduleThumbnails(appContext, items)
     }
 
     fun updateOne(item: ModItem) {
