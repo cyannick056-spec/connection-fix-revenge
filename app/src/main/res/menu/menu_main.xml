@@ -7,5 +7,5 @@
     <item android:id="@+id/action_folder" android:title="Carpeta de descargas" app:showAsAction="never" />
     <item android:id="@+id/action_columns" android:title="Columnas de galería" app:showAsAction="never" />
     <item android:id="@+id/action_theme" android:title="Tema / modo oscuro" app:showAsAction="never" />
-    <item android:id="@+id/action_patch" android:title="Instalar parche / actualización" app:showAsAction="never" />
+    <item android:id="@+id/action_patch" android:title="Buscar actualización de la app" app:showAsAction="never" />
 </menu>
