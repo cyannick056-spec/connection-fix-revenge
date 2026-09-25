@@ -11,9 +11,9 @@
     <application
         android:name=".DoaGalleryApp"
         android:allowBackup="true"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@drawable/kobeni_launcher"
         android:label="DOA Mod Gallery"
-        android:roundIcon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/kobeni_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.DOAModGallery"
         android:usesCleartextTraffic="false">
