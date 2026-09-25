@@ -24,6 +24,7 @@ import com.cris.doamodgallery.data.FavoritesStore
 import com.cris.doamodgallery.data.GalleryRepository
 import com.cris.doamodgallery.data.MegaIndexRepository
 import com.cris.doamodgallery.data.ModItem
+import com.cris.doamodgallery.data.OfflineMediaStore
 import com.cris.doamodgallery.data.SettingsStore
 import com.cris.doamodgallery.databinding.ActivityMainBinding
 import com.cris.doamodgallery.scanner.PostimagesGalleryScanner
@@ -76,10 +77,6 @@ class MainActivity : AppCompatActivity() {
         uiSettings = SettingsStore(this)
         updater = AppUpdater(this)
 
-        // Rebuild categories/titles locally for caches created by older parsers.
-        // No network request is required and a full 3379-item cache is preserved.
-        gallery.reindexLocalMetadata()
-
         adapter = ModAdapter(
             onOpen = { openDetail(it) },
             onFavorite = { favorites.toggle(it.id) }
@@ -98,14 +95,28 @@ class MainActivity : AppCompatActivity() {
         requestNotificationsIfNeeded()
 
         val cached = gallery.current()
-        if (cached.isEmpty() || cacheNeedsRepair(cached)) {
-            refreshGallery(autoMega = true)
-        } else {
+
+        // If a saved library exists, show it immediately. Never force a network scan at startup.
+        if (cached.isNotEmpty()) {
             render()
+            b.statusText.text = "${cached.size} skins · biblioteca local"
+
+            lifecycleScope.launch {
+                val changed = withContext(Dispatchers.IO) {
+                    gallery.reindexLocalMetadata()
+                }
+                if (changed) {
+                    refreshCharacterSpinner()
+                    render()
+                }
+            }
+        } else {
+            // First installation only: there is no local library yet.
+            refreshGallery(autoMega = false)
         }
 
         lifecycleScope.launch {
-            delay(2500)
+            delay(3500)
             checkForAppUpdate(forceMessage = false)
         }
     }
@@ -152,12 +163,6 @@ class MainActivity : AppCompatActivity() {
         b.characterSpinner.setSelection(index, false)
     }
 
-    private fun cacheNeedsRepair(items: List<ModItem>): Boolean {
-        if (items.isEmpty()) return true
-        val badTitles = items.count { it.title == "Sin título verificado" || TextUtils.looksLikePostId(it.title) }
-        return items.size < 3300 || badTitles > maxOf(8, items.size / 40)
-    }
-
     private fun setupUi() {
         b.search.doAfterTextChanged {
             searchJob?.cancel()
@@ -166,14 +171,17 @@ class MainActivity : AppCompatActivity() {
                 render()
             }
         }
+
         b.favoritesButton.setOnClickListener {
             showFavorites = !showFavorites
             b.favoritesButton.text = if (showFavorites) "★" else "☆"
             render()
         }
+
         b.toolbar.setOnMenuItemClickListener { item ->
             when (item.itemId) {
                 R.id.action_refresh -> { refreshGallery(autoMega = true); true }
+                R.id.action_offline -> { showOfflineLibraryDialog(); true }
                 R.id.action_hd -> { improveHd(); true }
                 R.id.action_mega -> { syncMega(); true }
                 R.id.action_folder -> { folderPicker.launch(null); true }
@@ -182,6 +190,79 @@ class MainActivity : AppCompatActivity() {
                 R.id.action_patch -> { checkForAppUpdate(forceMessage = true); true }
                 else -> false
             }
+        }
+    }
+
+    private fun showOfflineLibraryDialog() {
+        lifecycleScope.launch {
+            val stats = withContext(Dispatchers.IO) {
+                OfflineStats(
+                    thumbs = OfflineMediaStore.thumbnailCount(this@MainActivity),
+                    thumbBytes = OfflineMediaStore.thumbnailBytes(this@MainActivity),
+                    hd = OfflineMediaStore.hdCount(this@MainActivity),
+                    hdBytes = OfflineMediaStore.hdBytes(this@MainActivity),
+                    running = OfflineMediaStore.isThumbnailSyncRunning(),
+                    progress = OfflineMediaStore.thumbnailProgress()
+                )
+            }
+
+            val progressText = if (stats.running) {
+                "\nDescarga activa: ${stats.progress.first}/${stats.progress.second}"
+            } else ""
+
+            val options = arrayOf(
+                "Descargar miniaturas faltantes",
+                if (stats.running) "Pausar descarga de miniaturas" else "No hay descarga activa",
+                "Limpiar miniaturas",
+                "Limpiar imágenes HD"
+            )
+
+            MaterialAlertDialogBuilder(this@MainActivity)
+                .setTitle("Biblioteca offline")
+                .setMessage(
+                    "Miniaturas: ${stats.thumbs} · ${formatBytes(stats.thumbBytes)}\n" +
+                        "HD guardadas: ${stats.hd} · ${formatBytes(stats.hdBytes)}" +
+                        progressText +
+                        "\n\nLa app ya no descarga miles de imágenes al iniciar."
+                )
+                .setItems(options) { _, which ->
+                    when (which) {
+                        0 -> {
+                            val items = gallery.current()
+                            if (items.isEmpty()) {
+                                Toast.makeText(this@MainActivity, "Primero actualiza la galería.", Toast.LENGTH_SHORT).show()
+                            } else {
+                                OfflineMediaStore.scheduleThumbnails(this@MainActivity, items)
+                                b.statusText.text = "Miniaturas offline descargándose suavemente en segundo plano."
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "Descarga iniciada. Puedes seguir usando la app.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                        1 -> {
+                            if (OfflineMediaStore.isThumbnailSyncRunning()) {
+                                OfflineMediaStore.cancelThumbnailSync()
+                                b.statusText.text = "Descarga offline pausada. Lo ya descargado se conserva."
+                            }
+                        }
+                        2 -> {
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                OfflineMediaStore.clearThumbnails(this@MainActivity)
+                            }
+                            b.statusText.text = "Miniaturas locales limpiadas."
+                        }
+                        3 -> {
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                OfflineMediaStore.clearHd(this@MainActivity)
+                            }
+                            b.statusText.text = "Imágenes HD locales limpiadas."
+                        }
+                    }
+                }
+                .setNegativeButton("Cerrar", null)
+                .show()
         }
     }
 
@@ -359,6 +440,10 @@ class MainActivity : AppCompatActivity() {
         if (busy) return
         busy = true
         b.progress.visibility = View.VISIBLE
+
+        // Keep the already-saved gallery visible during refresh.
+        render()
+
         lifecycleScope.launch {
             val old = gallery.current().associateBy { it.id }
             try {
@@ -367,6 +452,7 @@ class MainActivity : AppCompatActivity() {
                     b.progress.progress = pct
                     b.statusText.text = msg
                 }
+
                 val merged = scanned.map { fresh ->
                     val prior = old[fresh.id]
                     if (prior == null) fresh else fresh.copy(
@@ -379,14 +465,26 @@ class MainActivity : AppCompatActivity() {
                         megaScore = prior.megaScore
                     )
                 }
-                gallery.save(merged)
-                gallery.reindexLocalMetadata()
+
+                // Persist first. AtomicFile keeps the previous valid gallery if Android
+                // kills the process or storage temporarily fails.
+                withContext(Dispatchers.IO) {
+                    gallery.save(merged)
+                    gallery.reindexLocalMetadata()
+                }
+
                 refreshCharacterSpinner()
                 render()
+                b.statusText.text = "${gallery.current().size} skins guardadas localmente."
+
                 if (autoMega) syncMegaInternal()
             } catch (e: Exception) {
                 b.statusText.text = "Escaneo incompleto: ${e.message}"
-                Toast.makeText(this@MainActivity, "No se guardó una galería parcial.", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this@MainActivity,
+                    "Se conservó tu última galería guardada.",
+                    Toast.LENGTH_LONG
+                ).show()
             } finally {
                 busy = false
                 b.progress.visibility = View.GONE
@@ -436,7 +534,9 @@ class MainActivity : AppCompatActivity() {
                     b.statusText.text = msg
                 }
             }
+
             b.statusText.text = "MEGA indexado: ${megaFiles.size} archivos. Relacionando…"
+
             val matches = mega.match(gallery.current()) { done, total, found ->
                 val pct = ((done * 100L) / total.coerceAtLeast(1)).toInt()
                 runOnUiThread {
@@ -444,7 +544,11 @@ class MainActivity : AppCompatActivity() {
                     b.statusText.text = "Relacionando MEGA… $done/$total · $found coincidencias"
                 }
             }
-            gallery.attachMega(matches)
+
+            withContext(Dispatchers.IO) {
+                gallery.attachMega(matches)
+            }
+
             b.statusText.text = "MEGA listo: ${megaFiles.size} archivos · ${matches.size} skins con descarga."
             render()
         } catch (e: Exception) {
@@ -468,6 +572,28 @@ class MainActivity : AppCompatActivity() {
                 .launch(Manifest.permission.POST_NOTIFICATIONS)
         }
     }
+
+    private fun formatBytes(value: Long): String {
+        if (value <= 0L) return "0 B"
+        val kb = value / 1024.0
+        val mb = kb / 1024.0
+        val gb = mb / 1024.0
+        return when {
+            gb >= 1.0 -> "%.2f GB".format(gb)
+            mb >= 1.0 -> "%.1f MB".format(mb)
+            kb >= 1.0 -> "%.0f KB".format(kb)
+            else -> "$value B"
+        }
+    }
+
+    private data class OfflineStats(
+        val thumbs: Int,
+        val thumbBytes: Long,
+        val hd: Int,
+        val hdBytes: Long,
+        val running: Boolean,
+        val progress: Pair<Int, Int>
+    )
 }
 
 private class SimpleItemSelectedListener(private val action: () -> Unit) : android.widget.AdapterView.OnItemSelectedListener {
