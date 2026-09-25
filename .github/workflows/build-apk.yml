@@ -49,11 +49,11 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Set app version v0.2.5
+      - name: Set app version v0.2.6
         shell: bash
         run: |
-          sed -i -E 's/versionCode = [0-9]+/versionCode = 7/' app/build.gradle.kts
-          sed -i -E 's/versionName = "[^"]+"/versionName = "0.2.5-alpha"/' app/build.gradle.kts
+          sed -i -E 's/versionCode = [0-9]+/versionCode = 8/' app/build.gradle.kts
+          sed -i -E 's/versionName = "[^"]+"/versionName = "0.2.6-alpha"/' app/build.gradle.kts
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
@@ -86,6 +86,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: DOA-Mod-Gallery-Android-v0.2.5
+          name: DOA-Mod-Gallery-Android-v0.2.6
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
