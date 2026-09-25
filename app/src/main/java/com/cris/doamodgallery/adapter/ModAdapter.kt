@@ -42,7 +42,7 @@ class ModAdapter(
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): Holder =
         Holder(ItemModBinding.inflate(LayoutInflater.from(parent.context), parent, false))
 
-    override fun onBindViewHolder(holder: Holder, position: Int) = holder.bind(getItem(position), full = true)
+    override fun onBindViewHolder(holder: Holder, position: Int) = holder.bind(getItem(position))
 
     override fun onBindViewHolder(holder: Holder, position: Int, payloads: MutableList<Any>) {
         if (payloads.isEmpty()) {
@@ -57,7 +57,7 @@ class ModAdapter(
     inner class Holder(private val b: ItemModBinding) : RecyclerView.ViewHolder(b.root) {
         private var bound: ModItem? = null
 
-        fun bind(item: ModItem, full: Boolean) {
+        fun bind(item: ModItem) {
             bound = item
             b.title.text = item.title
             b.character.text = item.character
@@ -85,8 +85,9 @@ class ModAdapter(
             }
         }
 
-        fun updateFavorite(item: ModItem = bound ?: return) {
-            val yes = item.id in favorites
+        fun updateFavorite(item: ModItem? = bound) {
+            val value = item ?: return
+            val yes = value.id in favorites
             b.favorite.text = if (yes) "★" else "☆"
             b.favorite.setTextColor(b.root.context.getColor(if (yes) R.color.blue else R.color.text_secondary))
         }
