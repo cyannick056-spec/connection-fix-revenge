@@ -4,6 +4,10 @@ import java.text.Normalizer
 import kotlin.math.max
 
 object TextUtils {
+    // Known names are still useful for MEGA matching, but a gallery category is only
+    // accepted when the character name appears at the END of the canonical post title.
+    // This prevents source-outfit names such as "Amy DOAXVV ... Hitomi" from creating
+    // an incorrect Amy category when the actual target is Hitomi.
     val characters = listOf(
         "Marie Rose","Phase 4","Alpha-152","Naotora Ii","Mai Shiranui","Ryu Hayabusa","Brad Wong","Jann Lee","La Mariposa",
         "Honoka","Kasumi","Ayane","Hitomi","Leifang","Kokoro","Helena","Christie","Tina","Mila","Lisa","Rachel","Momiji",
@@ -27,19 +31,22 @@ object TextUtils {
     }
 
     fun detectCharacter(text: String): String {
-        val n = " ${normalize(cleanPostTitle(text))} "
-        return characters.mapNotNull { character ->
-            val cn = normalize(character)
-            val index = n.lastIndexOf(" $cn ")
-            if (index >= 0) Triple(character, index, cn.length) else null
-        }.maxWithOrNull(compareBy<Triple<String, Int, Int>> { it.second }.thenBy { it.third })
+        val cleaned = normalize(cleanPostTitle(text))
+        if (cleaned.isBlank()) return ""
+
+        // Funnybunny's naming convention places the target character at the end.
+        // Only accepting a suffix prevents outfit/source names from polluting filters.
+        return characters
+            .map { it to normalize(it) }
+            .filter { (_, cn) -> cleaned == cn || cleaned.endsWith(" $cn") }
+            .maxByOrNull { (_, cn) -> cn.length }
             ?.first
             .orEmpty()
     }
 
     fun cleanPostTitle(value: String): String {
         return value
-            .replace(Regex("(?i)\\s*[—–|-]\\s*postimages.*$"), "")
+            .replace(Regex("(?i)\\s*[—–|]\\s*postimages.*$"), "")
             .replace(Regex("(?i)\\s*postimages\\s*$"), "")
             .replace(Regex("(?i)\\.(jpg|jpeg|png|webp|gif)$"), "")
             .trim()
@@ -51,10 +58,18 @@ object TextUtils {
     }
 
     fun tokenMatch(query: String, text: String): Boolean {
-        val qs = normalize(query).split(' ').filter { it.isNotBlank() }
-        if (qs.isEmpty()) return true
-        val ts = normalize(text).split(' ').filter { it.isNotBlank() }
-        return qs.all { q -> ts.any { t -> t == q || t.startsWith(q) || q.startsWith(t) || t.contains(q) || q.contains(t) } }
+        val q = normalize(query)
+        if (q.isBlank()) return true
+        val t = normalize(text)
+        if (t.contains(q)) return true
+
+        val qs = q.split(' ').filter { it.isNotBlank() }
+        val ts = t.split(' ').filter { it.isNotBlank() }
+        return qs.all { needle ->
+            ts.any { token ->
+                token == needle || token.startsWith(needle) || needle.startsWith(token)
+            }
+        }
     }
 
     fun megaTokens(value: String): Set<String> = normalize(cleanPostTitle(value))
